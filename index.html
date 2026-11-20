@@ -1,0 +1,2332 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pixel Flash</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;700&display=swap" rel="stylesheet">
+<style>
+  html { background: #000; }
+  body {
+    margin: 0; position: relative; color: #fff;
+    font-family: "IBM Plex Mono", "SF Mono", Menlo, Consolas, "Liberation Mono", monospace; /* code-editor font */
+    text-transform: uppercase;
+  }
+  canvas {
+    position: absolute; top: 0; left: 0; z-index: -1;
+    width: 100%; height: 100%; image-rendering: pixelated;
+  }
+  #falling { position: fixed; height: 100vh; z-index: 1; pointer-events: none; } /* fire falling down the screen */
+  #reveal { position: fixed; height: 100vh; z-index: 1; pointer-events: none; image-rendering: auto; }
+  section {
+    min-height: 100vh; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; text-align: center;
+    padding: 40px clamp(28px, 14vw, 260px); /* side margins: grow with the screen, never below 28px */
+  }
+  section .panel {
+    max-width: 860px; padding: 28px 0; /* how wide the text column can get */
+  }
+  h1, h2 { margin: 0 0 16px; font-weight: 400; line-height: 1.35; } /* extra room for the stretched letters */
+  h1 { font-size: clamp(2.6rem, 7.2vw, 6rem); }
+  /* once the script is running, the pixelated text overlay replaces the DOM text visually */
+  .js-pixel h1, .js-pixel h2, .js-pixel p, .js-pixel .credit span, .js-pixel .poem-line { color: transparent; }
+  /* ---- the poem: every line keeps its own indent from the page, in em (so it scales with the text) ---- */
+  .poem {
+    display: inline-block; text-align: left; text-transform: none; /* same font as the opening line, but written as the poem is */
+    /* small enough that the widest line (indent + text) always fits the screen */
+    font-size: min(2rem, calc((100vw - 2 * clamp(16px, 5vw, 110px)) / 30));
+    line-height: 2.1; /* room between the lines */
+  }
+  .poem-line { display: block; white-space: nowrap; }
+  /* room under the poem so its last lines can still scroll up to the middle of the screen */
+  section:has(.poem) { padding-bottom: 50vh; padding-left: clamp(16px, 5vw, 110px); padding-right: clamp(16px, 5vw, 110px); } /* narrower margins so the poem can be bigger */
+  .poem-gap { height: 2.1em; } /* a blank line in the poem */
+  #text-overlay {
+    position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
+    z-index: 2; pointer-events: none;
+    /* the glow around the words: a tight bright halo plus a wider soft one (remove this line for no glow) */
+    filter: drop-shadow(0 0 4px rgba(255,255,255,.75)) drop-shadow(0 0 14px rgba(255,255,255,.45));
+  }
+  h2 { font-size: clamp(1.5rem, 4vw, 3.1rem); }
+  p { margin: 0; line-height: 1.6; font-weight: 400; font-size: clamp(1rem, 1.95vw, 1.6rem); }
+  /* no text selection or long-press menu while holding down to put the fire out */
+  body { user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; touch-action: none; }
+  /* ---- credits: a small two-column block under each section, same lettering as the titles ---- */
+  .credit {
+    position: relative; z-index: 3;
+    display: grid; grid-template-columns: 1fr 1fr; column-gap: 28px; row-gap: 6px;
+    max-width: 640px; margin: 44px auto 0;
+    font-size: clamp(.8rem, 1.25vw, 1.05rem); font-weight: 400; line-height: 1.45; /* smaller than the titles */
+  }
+  .credit span { display: block; }
+  .credit .role { text-align: right; }
+  .credit .name { text-align: left; }
+  #intro { position: fixed; inset: 0; width: 100vw; height: 100vh; z-index: 4; /* above the text, so the words sit behind the video */ pointer-events: none; background: #000; }
+  /* the opening video plays here unseen; it's drawn (and pixelated) onto the intro canvas */
+  #intro-src { position: fixed; left: 0; top: 0; width: 2px; height: 2px; opacity: 0; pointer-events: none; }
+  /* the question at the very end */
+  #question { position: fixed; inset: 0; z-index: 6; background: transparent; pointer-events: none;
+    display: flex; align-items: center; justify-content: center; text-align: center;
+    padding: 40px clamp(28px, 14vw, 260px); }
+  #question .q-words { position: relative; max-width: 860px; margin: 0 0 16px; padding: 28px 0;
+    font-size: clamp(2.6rem, 7.2vw, 6rem); font-weight: 400; line-height: 1.35; /* exactly the opening line's size and spacing */
+    color: #fff; text-shadow: 0 0 4px rgba(255,255,255,.75), 0 0 14px rgba(255,255,255,.45); }
+  /* each word's letters are stretched taller around their own middle, like the opening line, without spreading the lines apart */
+  #question .q-word { display: inline-block; transform: scaleY(1.25); white-space: nowrap; }
+  /* the ending: once the last line is typed, everything (the fire, the words, the photo, the lines) fades to
+     completely black, so the one green pixel is all there is */
+  body.ended #c, body.ended #c-glow, body.ended #falling, body.ended #falling-glow, body.ended #reveal,
+  body.ended #text-overlay, body.ended #note-lines, body.ended #note-lines-glow, body.ended #boom, body.ended #warn {
+    opacity: 0 !important; transition: opacity 3s ease-in 1s; }
+  /* writing your own: no flashing background pixels, only the note lines */
+  body.writing-own #c, body.writing-own #c-glow { opacity: 0 !important; }
+  #question .q-group { display: inline-block; white-space: nowrap; } /* two words that always stay on the same line */
+  #question .q-col { position: relative; display: flex; flex-direction: column; align-items: center; }
+  /* writing your own: the black lifts, the words and your poem drift up together, fading out at the top of the screen */
+  #question.writing { -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 25%); mask-image: linear-gradient(to bottom, transparent 0, #000 25%); }
+  #question.writing .q-col { position: absolute; left: 0; right: 0; box-sizing: border-box;
+    padding: 0 clamp(28px, 14vw, 260px); will-change: transform; }
+  #question .w-poem { display: none; }
+  #question.writing .w-poem { display: block; width: min(30em, 100%); margin-top: .4em; text-align: left; text-transform: none;
+    font-size: min(2rem, calc((100vw - 2 * clamp(28px, 14vw, 260px)) / 30)); line-height: 2.1; /* the first poem's size */
+    color: #fff; text-shadow: 0 0 4px rgba(255,255,255,.75), 0 0 14px rgba(255,255,255,.45); }
+  #question .w-line { min-height: 2.1em; white-space: pre-wrap; overflow-wrap: anywhere; }
+  #question .q-cursor.solid { animation: none; opacity: 1; }
+  #question .q-char { visibility: hidden; }
+  #question .q-char.on { visibility: visible; }
+  #question .q-cursor { display: inline-block; width: .5em; height: .85em; margin-left: .12em; margin-right: -.62em; /* takes up no room, so it never pushes a word onto the next line */ vertical-align: -0.08em;
+    background: #fff; box-shadow: 0 0 6px rgba(255,255,255,.7); animation: q-blink 1.06s steps(1) infinite; }
+  @keyframes q-blink { 50% { opacity: 0; } }
+  #skip { position: fixed; top: 0; right: 0; width: 60px; height: 60px; z-index: 50; cursor: pointer; opacity: 0; pointer-events: auto;
+    background: radial-gradient(circle, rgba(255,255,255,.5) 0 3px, transparent 4px); transition: opacity .3s; }
+  #skip:hover { opacity: .35; } /* hidden: only a faint dot when the mouse is right over it */
+  /* ---- credits: a tiny white square in the bottom right corner that opens a small card ---- */
+  #credits-btn { position: fixed; right: 18px; bottom: 18px; z-index: 60; width: 9px; height: 9px; padding: 0;
+    border: 0; background: #fff; cursor: pointer; opacity: .55; transition: opacity .25s, transform .25s; }
+  #credits-btn:hover, #credits-btn.open { opacity: 1; transform: scale(1.15); }
+  #credits-btn:focus-visible { outline: 1px solid #fff; outline-offset: 3px; }
+  #credits-card { position: fixed; right: 18px; bottom: 38px; z-index: 60;
+    padding: 14px 18px; background: rgba(0,0,0,.82); border: 1px solid rgba(255,255,255,.22);
+    -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px);
+    color: #fff; text-transform: none; font-size: 11px; line-height: 1.75; letter-spacing: .02em; white-space: nowrap;
+    opacity: 0; transform: translateY(6px); transform-origin: bottom right; pointer-events: none;
+    transition: opacity .25s ease, transform .25s ease; }
+  #credits-card.open { opacity: 1; transform: none; pointer-events: auto; }
+  #credits-card p { margin: 0; font-size: inherit; line-height: inherit; color: inherit !important; }
+  #credits-card .dim { color: rgba(255,255,255,.5); }
+  #warn {
+    position: fixed; top: 10px; left: 10px; z-index: 11; padding: 6px 10px;
+    font: 12px sans-serif; color: #fff; background: rgba(0,0,0,.6);
+    border-radius: 4px; cursor: pointer; user-select: none;
+  }
+</style>
+</head>
+<body>
+<canvas id="intro"></canvas> <!-- opening: a video that pixelates away into the fire -->
+<video id="intro-src" muted playsinline loop preload="auto"> <!-- the opening video: put the file next to this page -->
+  <source src="climatechange1.mov" type="video/mp4"> <!-- (labelled mp4 so Chrome will play a .mov) -->
+  <source src="climatechange1.mov" type="video/quicktime">
+  <source src="climatechange1.mp4" type="video/mp4"> <!-- used instead if there's an .mp4 copy -->
+</video>
+<canvas id="c"></canvas>
+<canvas id="falling"></canvas>
+<canvas id="reveal"></canvas> <!-- real tree photo shown through the fire while holding down -->
+<audio id="song" src="websitesong.m4a" autoplay loop preload="auto"></audio>
+<audio id="press-sound" src="_press_sound.m4a" loop preload="auto"></audio> <!-- plays while holding down -->
+
+<main>
+  <section>
+    <div class="panel">
+      <h1>WE'VE REACHED A POINT OF NO RETURN</h1>
+    </div>
+  </section>
+  <section>
+    <div class="panel">
+      <div class="poem">
+        <span class="poem-line" style="margin-left:0em">There is a forest</span>
+        <span class="poem-line" style="margin-left:6.48em">still burning</span>
+        <span class="poem-line" style="margin-left:10.43em">behind your ribs</span>
+        <div class="poem-gap"></div>
+        <span class="poem-line" style="margin-left:12em">a humble</span>
+        <span class="poem-line" style="margin-left:18em">stiffened crackle</span>
+        <span class="poem-line" style="margin-left:9em">like knuckles</span>
+        <span class="poem-line" style="margin-left:3em">in winter rush</span>
+        <div class="poem-gap"></div>
+        <span class="poem-line" style="margin-left:0em">the glaciers keep</span>
+        <span class="poem-line" style="margin-left:6.22em">their old shapes</span>
+        <span class="poem-line" style="margin-left:12em">in photographs</span>
+        <div class="poem-gap"></div>
+        <span class="poem-line" style="margin-left:6em">in heat</span>
+        <span class="poem-line" style="margin-left:9em">they loosen</span>
+        <span class="poem-line" style="margin-left:11.2em">like woodrot</span>
+        <span class="poem-line" style="margin-left:3em">you swear</span>
+        <span class="poem-line" style="margin-left:0em">you feel them</span>
+        <span class="poem-line" style="margin-left:9em">calving</span>
+        <div class="poem-gap"></div>
+        <span class="poem-line" style="margin-left:12em">somewhere</span>
+        <span class="poem-line" style="margin-left:9em">a limb</span>
+        <span class="poem-line" style="margin-left:12em">you never had</span>
+        <span class="poem-line" style="margin-left:18em">cleaving</span>
+        <span class="poem-line" style="margin-left:1em">the river remembers</span>
+        <span class="poem-line" style="margin-left:7em">its wide shoulders</span>
+        <div class="poem-gap"></div>
+        <span class="poem-line" style="margin-left:0em">now</span>
+        <span class="poem-line" style="margin-left:6em">it moves</span>
+        <span class="poem-line" style="margin-left:15em">through a narrow death</span>
+        <span class="poem-line" style="margin-left:12em">bed</span>
+        <span class="poem-line" style="margin-left:0em">like</span>
+        <span class="poem-line" style="margin-left:0em">a barbered leaf</span>
+        <div class="poem-gap"></div>
+        <span class="poem-line" style="margin-left:3em">there used to be</span>
+        <span class="poem-line" style="margin-left:12em">bees</span>
+        <span class="poem-line" style="margin-left:3em">in the forget me nots</span>
+        <span class="poem-line" style="margin-left:6em">their soft engines</span>
+        <span class="poem-line" style="margin-left:0em">hovering</span>
+        <div class="poem-gap"></div>
+        <span class="poem-line" style="margin-left:6em">at the elbow</span>
+        <span class="poem-line" style="margin-left:9em">of every afternoon</span>
+        <div class="poem-gap"></div>
+        <span class="poem-line" style="margin-left:6em">now the silence</span>
+        <div class="poem-gap"></div>
+        <span class="poem-line" style="margin-left:0em">shadows pressing</span>
+        <span class="poem-line" style="margin-left:3em">over your shoulder</span>
+        <span class="poem-line" style="margin-left:12em">on the</span>
+        <span class="poem-line" style="margin-left:3em">forest floor</span>
+        <div class="poem-gap"></div>
+        <span class="poem-line" style="margin-left:0em">how bodies make light</span>
+        <div class="poem-gap"></div>
+        <span class="poem-line" style="margin-left:6em">complicated</span>
+        <span class="poem-line" style="margin-left:9em">you press your hand</span>
+        <div class="poem-gap"></div>
+        <span class="poem-line" style="margin-left:6em">to the stump</span>
+        <span class="poem-line" style="margin-left:12em">of the season</span>
+        <span class="poem-line" style="margin-left:3em">and wait</span>
+        <div class="poem-gap"></div>
+        <span class="poem-line" style="margin-left:9em">for green</span>
+        <div class="poem-gap"></div>
+        <span class="poem-line" style="margin-left:0em">to answer</span>
+      </div>
+    </div>
+  </section>
+</main>
+<div id="warn">⚠ Flashing lights. Click to hide this note.</div>
+<button id="credits-btn" aria-label="Credits" aria-expanded="false"></button>
+<div id="credits-card" role="dialog" aria-label="Credits">
+  <p><span class="dim">Designed by</span> Sophia Ormond</p>
+  <p><span class="dim">Poem by</span> Kevin Gu, <i>Phantom Pains</i> 2026</p>
+</div>
+
+<script>
+  const PIXEL_SIZE = 22;     // size of each "pixel" in screen px
+  const FRAME_INTERVAL = 38; // ms between updates (higher = slower flashing)
+
+  // the fire builds as you go down the page: top values blend into bottom values
+  const PIXELS_TOP = 2;      // pixels per screen per frame at the top of the page (low = mostly black)
+  const PIXELS_BOTTOM = 90;  // ...and at the very bottom (more = more filled in)
+  const FADE_TOP = 0.2;      // how fast pixels fade at the top (0 = never, 1 = instantly)
+  const FADE_BOTTOM = 0.03;  // ...at the bottom: slower fade, so pixels pile up and fill the screen
+  const RAMP = 2.2;          // >1 keeps the top calm longer and builds faster near the end
+
+  // ---- putting it out: hold down to open a smoky hole in the fire and see the real trees ----
+  const DOUSE_RADIUS = 110;   // size of the hole when you first press, in px
+  const DOUSE_GROW = 120;     // how fast the hole keeps growing while you hold, in px per second
+  const HOLE_SOFTNESS = 0.45;  // 0-1: how much of the circle fades out into the background (bigger = softer edge)
+  const OPEN_MS = 450;        // how long the hole takes to open to its starting size
+  const CLOSE_MS = 1200;      // how long the fire takes to creep back over it after letting go
+  const ANGER_STEP = 0.3;     // how much harder everything burns after each try
+  const ANGER_MAX = 8;        // stops it getting stronger after this many tries
+
+  // photos revealed under the fire while holding down. put the image files in the same folder
+  // as this page; each new press shows the next one. missing files are skipped.
+  // names without the ending: .jpg, .jpeg, .png and .webp (any capitalization) are all tried
+  const REVEAL_IMAGES = ['trees1', 'trees2', 'trees3'];
+  const IMAGE_ENDINGS = ['jpg', 'jpeg', 'png', 'webp', 'JPG', 'JPEG', 'PNG', 'WEBP'];
+
+  const douse = { active: false, x: 0, y: 0, start: 0, anger: 0, r: 0, closeRate: 0 }; // r: hole size right now, in px
+  const goodImages = []; // loaded Image objects
+  let nextImage = 0;
+  REVEAL_IMAGES.forEach(name => { // preload, and remember which ones actually exist
+    if (/\.\w+$/.test(name)) return tryImage(name, [name]); // a full file name was given
+    tryImage(name, IMAGE_ENDINGS.map(end => name + '.' + end));
+  });
+  function tryImage(name, options) {
+    if (!options.length) { console.warn('Tree photo not found next to this page:', name); return; }
+    const img = new Image();
+    img.onload = () => { goodImages.push(img); console.log('Tree photo loaded:', options[0]); };
+    img.onerror = () => tryImage(name, options.slice(1));
+    img.src = options[0];
+  }
+  const rage = () => 1 + douse.anger * ANGER_STEP;
+
+  // how big the hole is right now (it eases open while held and eases shut after letting go)
+  function douseRadius() { return douse.r; }
+
+  // ---- press sound: plays from the start while you hold down, fades out when you let go ----
+  const PRESS_VOLUME = 0.8;      // 0 to 1
+  const PRESS_FADE_MS = 300;     // how quickly it fades out after letting go
+  const pressSound = document.getElementById('press-sound');
+  let pressFade = null;
+  function startPressSound() {
+    clearInterval(pressFade);
+    pressSound.volume = PRESS_VOLUME;
+    pressSound.currentTime = 0;
+    pressSound.play().catch(() => {}); // a missing file just stays silent
+  }
+  function stopPressSound() {
+    clearInterval(pressFade);
+    const steps = 10, drop = pressSound.volume / steps;
+    pressFade = setInterval(() => {
+      pressSound.volume = Math.max(0, pressSound.volume - drop);
+      if (pressSound.volume <= 0.001) { clearInterval(pressFade); pressSound.pause(); }
+    }, PRESS_FADE_MS / steps);
+  }
+
+  function endDouse() {
+    if (!douse.active) return;
+    douse.active = false;
+    stopPressSound();
+    if (performance.now() - douse.start < 200) return; // a quick click doesn't count
+    douse.anger = Math.min(ANGER_MAX, douse.anger + 1);
+  }
+  window.addEventListener('pointerdown', e => {
+    if (ending !== null && writing === null) { // the ending: hold down on the green to grow it (pressing anywhere else does nothing)
+      if (!asked && onGreen(e.clientX, e.clientY)) {
+        green.active = true; green.heldAt = performance.now(); douse.x = e.clientX; douse.y = e.clientY;
+      }
+      return;
+    }
+    douse.active = true; douse.start = performance.now(); douse.x = e.clientX; douse.y = e.clientY;
+    startPressSound();
+    if (goodImages.length) setPhoto(goodImages[nextImage++ % goodImages.length]); // next photo each time
+  });
+  window.addEventListener('pointermove', e => { douse.x = e.clientX; douse.y = e.clientY; });
+  window.addEventListener('pointerup', endDouse);
+  window.addEventListener('pointercancel', endDouse);
+  const endGreen = () => { green.active = false; };
+  window.addEventListener('pointerup', endGreen);
+  window.addEventListener('pointercancel', endGreen);
+  window.addEventListener('contextmenu', e => e.preventDefault());
+
+  const canvas = document.getElementById('c');
+  const ctx = canvas.getContext('2d');
+
+  // The canvas now covers the whole page height, so the pixels scroll with the content.
+  function resize() {
+    canvas.width = Math.ceil(canvas.clientWidth / PIXEL_SIZE);
+    canvas.height = Math.ceil(canvas.clientHeight / PIXEL_SIZE);
+  }
+  window.addEventListener('resize', resize);
+  new ResizeObserver(resize).observe(document.body);
+  resize();
+
+  // the background pixels take their colours from the tree photo (the one shown when you hold down)
+  const PHOTO_PIXEL_LOOK = 'brightness(1.2) saturate(1.2)'; // tweak the photo pixels' look ('none' = true to the photo)
+  const sampleCanvas = document.createElement('canvas');
+  const sampleCtx = sampleCanvas.getContext('2d');
+  let sample = null, sampledImg = null;
+  function photoSample() { // the photo shrunk to one pixel per background pixel on screen (cached)
+    const img = photo || goodImages[0];
+    if (!img) return null;
+    const w = Math.ceil(window.innerWidth / PIXEL_SIZE), h = Math.ceil(window.innerHeight / PIXEL_SIZE);
+    if (img !== sampledImg || !sample || sample.w !== w || sample.h !== h) {
+      sampleCanvas.width = w; sampleCanvas.height = h;
+      sampleCtx.imageSmoothingQuality = 'high';
+      sampleCtx.filter = PHOTO_PIXEL_LOOK;
+      sampleCtx.drawImage(img, ...coverRect(img, w, h));
+      sampleCtx.filter = 'none';
+      sample = { w, h }; // pixels are copied straight from this canvas (works even when opened as a local file)
+      sampledImg = img;
+    }
+    return sample;
+  }
+
+  let last = 0;
+  function frame(now) {
+    requestAnimationFrame(frame);
+    if (now - last < FRAME_INTERVAL) return; // throttle to slow the flashing
+    last = now;
+    // no background pixels at all until the credits start scrolling
+    if (bgStartAt === null) { ctx.clearRect(0, 0, canvas.width, canvas.height); return; }
+
+    const H = canvas.height;
+    const depthAt = y => Math.pow(y / Math.max(1, H - 1), RAMP); // 0 at the top, 1 at the bottom
+    const mix = (a, b, d) => a + (b - a) * d;
+
+    // fade previous frame toward black, less and less the further down the page
+    const fade = ctx.createLinearGradient(0, 0, 0, H);
+    for (let i = 0; i <= 10; i++) {
+      fade.addColorStop(i / 10, `rgba(0,0,0,${mix(FADE_TOP, FADE_BOTTOM, Math.pow(i / 10, RAMP))})`);
+    }
+    ctx.fillStyle = fade;
+    ctx.fillRect(0, 0, canvas.width, H);
+
+    // try enough spots for the bottom's density, then keep fewer of them higher up the page
+    const screens = (H * PIXEL_SIZE) / window.innerHeight;
+    // right after scrolling starts only a stray pixel or few flash, then more and more join in
+    const want = PIXELS_BOTTOM * screens * rage() * bgEase(now); // burns harder after every try
+    const tries = Math.floor(want) + (Math.random() < want % 1 ? 1 : 0);
+    const pic = photoSample();                              // the tree photo, one colour per pixel of the screen
+    const topRow = Math.floor(window.scrollY / PIXEL_SIZE); // which page row is at the top of the screen
+    for (let i = 0; i < tries; i++) {
+      const y = Math.floor(Math.random() * H);
+      const d = depthAt(y);
+      if (Math.random() > mix(PIXELS_TOP, PIXELS_BOTTOM, d) / PIXELS_BOTTOM) continue;
+      const x = Math.floor(Math.random() * canvas.width);
+      if (pic) { // each pixel shows the colour of the photo right behind it
+        const sy = y - topRow;
+        if (sy < 0 || sy >= pic.h || x >= pic.w) continue; // off screen: the photo isn't behind it
+        ctx.globalAlpha = 0.7 + Math.random() * 0.3; // a little flicker in brightness
+        ctx.drawImage(sampleCanvas, x, sy, 1, 1, x, y, 1, 1);
+        ctx.globalAlpha = 1;
+        continue;
+      }
+      // no photo found: fall back to fire colours
+      // deeper = burning red: the colors narrow toward deep reds, with the odd hot ember
+      const ember = Math.random() < mix(0.15, 0.08, d);                  // occasional bright orange/yellow spark
+      const hue = ember ? 20 + Math.random() * 30 : Math.random() * mix(55, 14, d); // 0 = red ... 55 = yellow
+      const light = ember ? 55 + Math.random() * 10
+                          : mix(40, 30, d) + Math.random() * mix(25, 25, d);       // brightness %
+      ctx.fillStyle = `hsl(${hue}, 100%, ${light}%)`;
+      ctx.fillRect(x, y, 1, 1);
+    }
+
+  }
+  requestAnimationFrame(frame);
+
+  // ---- falling fire: pixels drop from the top of the screen to the bottom ----
+  const FALL_ENABLED = true;    // false = no falling fire at all
+  const FALL_CELL = 6;          // size of each falling pixel in screen px
+  const FALL_RATE_TOP = 0.5;     // new falling pixels per second at the top of the page (very few)
+  const FALL_RATE_BOTTOM = 7;    // ...and by the end of the poem: still just a light scattering
+  const FALL_BUILD = 2;          // >1 keeps the falling fire sparse longer before it builds up
+  const FALL_SPEED = [180, 420]; // min/max fall speed, px per second (they fall up to twice as fast by the end)
+  const FALL_TAIL = 8;           // how many pixels of trail behind each one
+
+  // ---- when fire hits the bottom of the screen it doesn't collect: it just throws up a little splash of sparks ----
+  const SPLASH_SPARKS = [3, 7];  // min/max sparks per splash
+  const SPLASH_HEIGHT = 22;      // how high the sparks jump, in falling-fire pixels (about 6px each)
+
+  const fallCanvas = document.getElementById('falling');
+  const fctx = fallCanvas.getContext('2d');
+  let drops = [];
+  let splashes = []; // little sparks thrown up where fire hits the bottom
+  function sizeFall() {
+    fallCanvas.width = Math.ceil(window.innerWidth / FALL_CELL);
+    fallCanvas.height = Math.ceil(window.innerHeight / FALL_CELL);
+  }
+  function clearPile() { splashes = []; drops = []; }
+  // fire hits the bottom at column x: a little burst of sparks jumps up, arcs over and fades
+  function land(x, heat) {
+    const n = SPLASH_SPARKS[0] + Math.floor(Math.random() * (SPLASH_SPARKS[1] - SPLASH_SPARKS[0] + 1));
+    const up = Math.sqrt(2 * 120 * SPLASH_HEIGHT); // launch speed that reaches about SPLASH_HEIGHT under the gravity below
+    for (let i = 0; i < n; i++) {
+      splashes.push({
+        x: x + 0.5, y: fallCanvas.height - 1,
+        vx: (Math.random() - 0.5) * 30, vy: -up * (0.35 + Math.random() * 0.65),
+        life: 0, max: 0.35 + Math.random() * 0.45, heat: Math.min(1, heat + 0.2),
+      });
+    }
+  }
+  // lets other parts of the page drop fire in (screen position in px)
+  function dropFire(px, py, opts = {}) {
+    drops.push({
+      x: px / FALL_CELL, y: py / FALL_CELL,
+      vy: (opts.speed || 60 + Math.random() * 60) / FALL_CELL,
+      drift: (Math.random() - 0.5) * 1.5,
+      tail: opts.tail ?? 2, heat: opts.heat ?? 0.6,
+    });
+  }
+  window.addEventListener('resize', sizeFall);
+  sizeFall();
+
+  let lastFall = null, spawnDebt = 0;
+  function fallFrame(now) {
+    requestAnimationFrame(fallFrame);
+    if (lastFall === null) { lastFall = now; return; }
+    const dt = Math.min(0.1, (now - lastFall) / 1000);
+    lastFall = now;
+
+    // how far down the page we are: 0 at the top, 1 at the bottom
+    const maxScroll = Math.max(1, document.documentElement.scrollHeight - window.innerHeight);
+    const depth = Math.min(1, window.scrollY / maxScroll);
+
+    // open the hole while holding, let the fire creep back after letting go
+    // while holding, the hole opens to its starting size, then keeps growing the longer you hold
+    // (until it covers the whole screen). after letting go, the fire closes it back up.
+    const maxR = Math.hypot(window.innerWidth, window.innerHeight);
+    if (douse.active) {
+      const held = (now - douse.start) / 1000;
+      const openK = Math.min(1, held * 1000 / OPEN_MS);
+      const target = DOUSE_RADIUS * (1 - (1 - openK) * (1 - openK)) + DOUSE_GROW * Math.max(0, held - OPEN_MS / 1000);
+      douse.r = Math.min(maxR, Math.max(douse.r, target));
+      douse.closeRate = Math.max(DOUSE_RADIUS, douse.r) / (CLOSE_MS / 1000);
+    } else {
+      douse.r = Math.max(0, douse.r - douse.closeRate * dt); // closes in about CLOSE_MS, however big it got
+    }
+
+    spawnDebt += bgEase(now) * (FALL_RATE_TOP + (FALL_RATE_BOTTOM - FALL_RATE_TOP) * Math.pow(depth, FALL_BUILD)) * rage() * dt;
+    if (bgStartAt === null || !FALL_ENABLED) spawnDebt = 0; // nothing falls until the background fire starts (or at all, if turned off)
+    while (spawnDebt >= 1 && drops.length < 2000) {
+      spawnDebt--;
+      drops.push({
+        x: Math.random() * fallCanvas.width,
+        y: -Math.random() * 6,
+        vy: (FALL_SPEED[0] + Math.random() * (FALL_SPEED[1] - FALL_SPEED[0])) * (1 + Math.pow(depth, FALL_BUILD)) / FALL_CELL,
+        drift: (Math.random() - 0.5) * 1.5, // slight sideways sway, in cells per second
+      });
+    }
+
+    fctx.clearRect(0, 0, fallCanvas.width, fallCanvas.height);
+    const H = fallCanvas.height;
+    drops = drops.filter(p => {
+      p.y += p.vy * dt;
+      p.x += p.drift * dt + (Math.random() - 0.5) * 0.15; // a little flicker sideways
+      if (p.y >= H - 1) { land(Math.floor(p.x), p.heat ?? 1); return false; } // hit the bottom: splash
+      const fell = Math.max(0, Math.min(1, p.y / H)); // cools from yellow to red as it falls
+      const x = Math.floor(p.x), y = Math.floor(p.y);
+      const tail = p.tail ?? FALL_TAIL;
+      for (let j = tail; j >= 0; j--) {               // trail first, bright head last
+        const k = j / (tail + 1);
+        const hue = (1 - fell) * 50 * (1 - k) + 2;     // head: yellow -> red; tail: redder
+        const light = 60 - k * 30 - fell * 10;
+        fctx.globalAlpha = (1 - k) * (0.75 + Math.random() * 0.25);
+        fctx.fillStyle = `hsl(${hue}, 100%, ${light}%)`;
+        fctx.fillRect(x, y - j, 1, 1);
+      }
+      return true;
+    });
+
+    // the splashes: sparks fly up, fall back under gravity, cooling from yellow to red as they fade
+    splashes = splashes.filter(sp => {
+      sp.life += dt;
+      if (sp.life >= sp.max) return false;
+      sp.vy += 120 * dt;
+      sp.x += sp.vx * dt; sp.y = Math.min(H - 1, sp.y + sp.vy * dt);
+      const f = sp.life / sp.max;
+      fctx.globalAlpha = (1 - f) * (0.65 + 0.35 * Math.random());
+      fctx.fillStyle = `hsl(${(1 - f) * 50 * sp.heat + 4}, 100%, ${70 - 35 * f}%)`;
+      fctx.fillRect(Math.floor(sp.x), Math.floor(sp.y), 1, 1);
+      return true;
+    });
+    fctx.globalAlpha = 1;
+
+    // the real trees, seen through a hole in the fire around the pointer
+    const rr = douseRadius(now);
+    drawPhoto(rr, now);
+    fctx.globalAlpha = 1;
+  }
+  requestAnimationFrame(fallFrame);
+
+  // ---- the photo in the hole: sharp in the middle, blending softly into the background ----
+  const photoCanvas = document.getElementById('reveal');
+  const pctx = photoCanvas.getContext('2d');
+  let photo = null, photoDirty = false;
+
+  function sizePhoto() {
+    photoCanvas.width = window.innerWidth;
+    photoCanvas.height = window.innerHeight;
+    if (photo) setPhoto(photo);
+  }
+  function coverRect(img, w, h) { // fill the screen like CSS background-size: cover
+    const sc = Math.max(w / img.naturalWidth, h / img.naturalHeight);
+    const dw = img.naturalWidth * sc, dh = img.naturalHeight * sc;
+    return [(w - dw) / 2, (h - dh) / 2, dw, dh];
+  }
+  function setPhoto(img) { photo = img; }
+  window.addEventListener('resize', sizePhoto);
+  sizePhoto();
+
+  function drawPhoto(r, now) {
+    if (photoDirty) { pctx.clearRect(0, 0, photoCanvas.width, photoCanvas.height); photoDirty = false; }
+    if (r < 2 || !photo) return;
+    photoDirty = true;
+    // the photo, sharp in the middle, fading out smoothly toward the edge so it melts into the background
+    pctx.save();
+    pctx.drawImage(photo, ...coverRect(photo, photoCanvas.width, photoCanvas.height));
+    pctx.globalCompositeOperation = 'destination-in'; // keep the photo only as much as the fade allows (none outside the circle)
+    const fade = pctx.createRadialGradient(douse.x, douse.y, r * (1 - HOLE_SOFTNESS), douse.x, douse.y, r);
+    fade.addColorStop(0, 'rgba(0,0,0,1)');
+    fade.addColorStop(0.5, 'rgba(0,0,0,0.6)');
+    fade.addColorStop(1, 'rgba(0,0,0,0)');
+    pctx.fillStyle = fade;
+    pctx.fillRect(0, 0, photoCanvas.width, photoCanvas.height);
+    pctx.restore();
+  }
+
+  // smooth random pattern (value noise) so the smoke has soft, cloudy shapes
+  function noise(x, y, seed) {
+    const xi = Math.floor(x), yi = Math.floor(y);
+    let fx = x - xi, fy = y - yi;
+    fx = fx * fx * (3 - 2 * fx); fy = fy * fy * (3 - 2 * fy);
+    const a = hash(xi, yi, seed), b = hash(xi + 1, yi, seed);
+    const c = hash(xi, yi + 1, seed), d = hash(xi + 1, yi + 1, seed);
+    return (a + (b - a) * fx) * (1 - fy) + (c + (d - c) * fx) * fy;
+  }
+
+
+
+  document.getElementById('warn').addEventListener('click', e => e.target.remove());
+
+
+  // ---- background music ----
+  // Browsers block autoplay with sound until the visitor interacts, so if the
+  // first attempt is blocked, the song starts on the first click/tap/keypress.
+  const song = document.getElementById('song');
+  song.volume = 0.7; // 0 to 1
+
+  const UNLOCK_EVENTS = ['pointerdown', 'click', 'touchend', 'keydown'];
+
+  function startSong() {
+    song.play().then(() => {
+      UNLOCK_EVENTS.forEach(ev => window.removeEventListener(ev, startSong, true));
+    }).catch(() => {});
+  }
+
+  // try to play the moment the page opens
+  const attempt = song.play();
+  if (attempt) attempt.catch(() => {
+    // blocked by the browser: start on the visitor's first interaction instead
+    UNLOCK_EVENTS.forEach(ev => window.addEventListener(ev, startSong, true));
+  });
+
+  // ---- pixelated text ----
+  // Each line pixelates in on its own (see "one at a time" below), then disintegrates once it passes center.
+  const TEXT_COLOR = '#fff';    // colour of the words and the typing cursor
+  const TEXT_STRETCH = 1.25; // how much taller the letters are than normal (1 = normal)
+  const BLOCK_SIZES = [2, 3, 4, 6, 8, 12, 16, 24, 32, 48]; // pixel block sizes as it degrades
+
+  let atBottom = false; // scrolled all the way down: any lines left type wherever they are
+  let nextUntyped = null; // how far below center the next line still waiting to be typed is (null = none)
+  const textEls = Array.from(document.querySelectorAll('main h1, main h2, main p, main .credit span, main .poem-line'));
+  const overlay = document.createElement('canvas');
+  overlay.id = 'text-overlay';
+  document.body.appendChild(overlay);
+  const octx = overlay.getContext('2d');
+  let dpr = 1;
+  let items = [];
+
+  // reads how the browser actually wrapped an element's text: one string per line on screen
+  function domLines(el) {
+    const upper = getComputedStyle(el).textTransform === 'uppercase'; // the poem keeps its own capitals
+    const node = el.firstChild;
+    const text = el.textContent;
+    const lines = [];
+    let current = [], lastTop = null;
+    const re = /\S+/g;
+    let m;
+    while ((m = re.exec(text))) {
+      const range = document.createRange();
+      range.setStart(node, m.index);
+      range.setEnd(node, m.index + m[0].length);
+      const rect = range.getClientRects()[0];
+      const t = rect ? rect.top : lastTop;
+      if (lastTop !== null && t - lastTop > 2) { lines.push(current.join(' ')); current = []; }
+      current.push(upper ? m[0].toUpperCase() : m[0]);
+      lastTop = t;
+    }
+    if (current.length) lines.push(current.join(' '));
+    return lines.length ? lines : [''];
+  }
+
+  function buildItems() {
+    const before = new Map(items.map(it => [it.el, it])); // keep how far each line has been typed
+    dpr = Math.min(window.devicePixelRatio || 1, 2);
+    overlay.width = Math.round(window.innerWidth * dpr);
+    overlay.height = Math.round(window.innerHeight * dpr);
+
+    items = textEls.map(el => {
+      const r = el.getBoundingClientRect();
+      const cs = getComputedStyle(el);
+      const w = Math.max(1, Math.ceil(r.width));
+      const h = Math.max(1, Math.ceil(r.height));
+
+      // render the text crisply onto its own canvas
+      const src = document.createElement('canvas');
+      src.width = Math.ceil(w * dpr);
+      src.height = Math.ceil(h * dpr);
+      const c = src.getContext('2d');
+      c.scale(dpr, dpr);
+      c.font = `${cs.fontWeight} ${cs.fontSize} ${cs.fontFamily}`;
+      c.fillStyle = TEXT_COLOR;
+      c.textAlign = 'left';
+      c.textBaseline = 'middle';
+      const align = cs.textAlign; // credits are right/left aligned; titles are centered
+      const lh = parseFloat(cs.lineHeight) || parseFloat(cs.fontSize) * 1.2;
+
+      // use the page's own line breaks so the drawn text always matches the space it was given
+      const lines = domLines(el);
+      const top = (h - lines.length * lh) / 2;
+      // if the canvas measures a line a hair wider than the page did, squeeze it just enough to fit
+      const fits = lines.map(l => Math.min(1, (w - 2) / Math.max(1, c.measureText(l).width)));
+      const lefts = lines.map((l, i) => { // where each line starts, following the element's alignment
+        const lw = c.measureText(l).width * fits[i];
+        return align === 'right' || align === 'end' ? w - lw : align === 'left' || align === 'start' ? 0 : (w - lw) / 2;
+      });
+      lines.forEach((l, i) => { // each line stretched taller around its own middle
+        c.save();
+        c.translate(lefts[i], top + i * lh + lh / 2);
+        c.scale(fits[i], TEXT_STRETCH);
+        c.fillText(l, 0, 0);
+        c.restore();
+      });
+
+      // typing: remember where every letter ends (text-canvas pixels) and when it gets typed
+      const fontPx = parseFloat(cs.fontSize);
+      const typedLines = [];
+      const isCredit = !!el.closest('.credit');
+      const isPoem = el.classList.contains('poem-line');
+      const speed = isCredit ? 0.35 : isPoem ? 1.3 : 1; // credits type faster; poem lines type slower (higher = slower)
+      let clock = 0, ci = 0;
+      lines.forEach((l, i) => {
+        const left = lefts[i];
+        const ends = [], times = [];
+        for (let k = 0; k < l.length; k++) {
+          ends.push(Math.ceil((left + c.measureText(l.slice(0, k + 1)).width * fits[i]) * dpr));
+          times.push(clock);
+          // human-ish rhythm: a bit of random variation, a longer beat after punctuation
+          clock += CHAR_MS * speed * (0.6 + 0.8 * hash(ci++, i, 99));
+          if (/[.,!?]/.test(l[k])) clock += PUNCT_PAUSE_MS;
+        }
+        typedLines.push({
+          x: Math.max(0, Math.floor((left - 4) * dpr)),
+          y: Math.max(0, Math.floor((top + i * lh) * dpr)),
+          h: Math.ceil(lh * dpr),
+          mid: (top + i * lh + lh / 2) * dpr,
+          ends, times,
+        });
+      });
+      const typeTotal = clock;
+      // what the visitor has to type: every character in order, with a space between wrapped lines.
+      // li/k: which line and where in it the cursor sits before this character
+      const chars = [], lineStart = [];
+      lines.forEach((l, li) => {
+        if (li > 0) chars.push({ li: li - 1, k: lines[li - 1].length, ch: ' ' }); // the space where the line wrapped
+        lineStart.push(chars.length);
+        for (let k = 0; k < l.length; k++) chars.push({ li, k, ch: l[k] });
+      });
+      // the key words in this line: the letters the visitor has to type themselves
+      const isKey = chars.map(() => false);
+      const flat = chars.map(c => c.ch).join('');
+      // the visitor types every letter, number and space (punctuation like the ' in WE'VE types itself)
+      chars.forEach((c, i) => { isKey[i] = /[a-z0-9 ]/i.test(c.ch); });
+      // how long the automatic typing takes over each character (a human-ish rhythm)
+      const delays = chars.map((c, i) => CHAR_MS * speed * (0.6 + 0.8 * hash(i, c.li, 99)) + (/[.,!?]/.test(c.ch) ? PUNCT_PAUSE_MS : 0));
+      const cursor = { w: Math.ceil(fontPx * 0.5 * dpr), h: Math.ceil(fontPx * 0.85 * TEXT_STRETCH * dpr) };
+
+      const levels = buildLevels(src);
+
+      return {
+        el, w, h, src, levels, typedLines, typeTotal, cursor, chars, lineStart, isKey, delays,
+        pos: 0, doneAt: null, lastKey: 0, wrongAt: 0, revealStart: null, nextAt: 0, gap: isCredit ? GAP_MS * 0.15 : isPoem ? 60 : GAP_MS,
+        isRole: el.classList.contains('role'), isName: el.classList.contains('name'),
+        small: document.createElement('canvas'),
+        tmp: document.createElement('canvas'),
+      };
+    });
+    items.forEach(it => {
+      const b = before.get(it.el);
+      if (b) {
+        it.revealStart = b.revealStart; it.lastKey = b.lastKey; it.wrongAt = b.wrongAt;
+        it.pos = Math.min(b.pos, it.chars.length); it.doneAt = b.doneAt; it.nextAt = b.nextAt;
+      }
+    });
+    document.documentElement.classList.add('js-pixel');
+  }
+
+  // pre-build smaller copies so heavy downscaling stays clean
+  function buildLevels(src) {
+    const levels = [src];
+    let cur = src;
+    while (cur.width > 8 && cur.height > 8) {
+      const next = document.createElement('canvas');
+      next.width = Math.max(1, Math.ceil(cur.width / 2));
+      next.height = Math.max(1, Math.ceil(cur.height / 2));
+      next.getContext('2d').drawImage(cur, 0, 0, next.width, next.height);
+      levels.push(next);
+      cur = next;
+    }
+    return levels;
+  }
+
+  // deterministic 0-1 random value per block, so the dissolve doesn't shimmer randomly
+  function hash(x, y, s) {
+    let h = Math.imul(x, 374761393) ^ Math.imul(y, 668265263) ^ Math.imul(s, 1442695041);
+    h = Math.imul(h ^ (h >>> 13), 1274126177);
+    return ((h ^ (h >>> 16)) >>> 0) / 4294967295;
+  }
+
+  // ---- disintegrating: text that has scrolled above center has been read, so it breaks
+  // into bigger and bigger pixel blocks that drop away into the background ----
+  const DISSOLVE_SPAN = 0.3;  // how far above center the text takes to disappear completely (0-1)
+  const DISSOLVE_FADE = 0.6;  // 0-1: how much the blocks also fade out as they go (0 = stay bright)
+  const DISSOLVE_REST = 0.55; // 0-1: how far the words break down before they stop (1 = vanish completely).
+                              // below 1, read lines stay behind as a blurred, pixelated ghost of themselves
+
+  function dissolveItem(it, b, x, y) { // b: 0 = untouched, 1 = as broken down as it gets
+    if (b <= 0.01) { octx.drawImage(it.src, x, y); return; }
+    b *= DISSOLVE_REST; // never all the way gone
+    // the blocks get bigger as it goes (steps through BLOCK_SIZES)
+    const step = Math.min(BLOCK_SIZES.length - 1, Math.floor(Math.pow(b, 0.8) * BLOCK_SIZES.length));
+    const bs = BLOCK_SIZES[step] * dpr;
+    const sw = Math.max(1, Math.ceil(it.src.width / bs));
+    const sh = Math.max(1, Math.ceil(it.src.height / bs));
+    let mip = it.levels[0]; // smallest pre-shrunk copy that's still big enough, so the blocks stay clean
+    for (let i = it.levels.length - 1; i >= 0; i--) {
+      if (it.levels[i].width >= sw && it.levels[i].height >= sh) { mip = it.levels[i]; break; }
+    }
+    const sm = it.small;
+    sm.width = sw; sm.height = sh;
+    const sx = sm.getContext('2d');
+    sx.imageSmoothingQuality = 'high';
+    sx.drawImage(mip, 0, 0, sw, sh);
+    // more and more blocks drop out, at random, until nothing is left
+    const gone = Math.pow(b, 1.4);
+    for (let by = 0; by < sh; by++) {
+      for (let bx = 0; bx < sw; bx++) {
+        if (hash(bx, by, 13 + step) < gone) sx.clearRect(bx, by, 1, 1);
+      }
+    }
+    octx.save();
+    octx.imageSmoothingEnabled = false; // blow the tiny copy back up into hard-edged blocks
+    octx.globalAlpha = 1 - DISSOLVE_FADE * b;
+    octx.drawImage(sm, 0, 0, sw, sh, x, y, sw * bs, sh * bs);
+    octx.restore();
+  }
+
+  // ---- typing: the visitor types the whole poem ----
+  // every line waits on screen as faint, see-through text, and lights up letter by letter as it's typed.
+  // the opening line holds the page still until it's typed. after that the page keeps slowly scrolling whether
+  // you keep up or not: a line you haven't finished pulses as it rises, and if it reaches the top part of the
+  // screen still unfinished, everything blows up and the poem starts again from the beginning.
+  // capitals don't matter, punctuation types itself, and a wrong key does nothing (it still plays its note).
+  const TYPE_SCROLL_SPEED = 14; // how fast the page scrolls while the poem is being typed, px per second (lower = more time)
+  const GHOST = 0.28;         // 0-1: how see-through the lines are before they're typed
+  const FAIL_LINE = -0.7;     // how far up an unfinished line can rise before it all blows up (0 = center, -1 = top of the screen)
+  const REVEAL_LINE = 0.9;    // 0-1: how far below center a line becomes ready to type (0 = right in the center, 1 = bottom of the screen)
+  const WAIT_LINE = 0;        // where the scrolling waits for the automatic typing to catch up (0 = center)
+  const CHAR_MS = 75;         // average time per letter of the automatic typing (lower = faster)
+  const PUNCT_PAUSE_MS = 250; // extra beat after . , ! ?
+  const GAP_MS = 700;         // cursor blinks this long after a line before the next one starts
+  const BLINK_MS = 530;       // cursor blink speed
+
+  const isTyped = it => it.pos >= it.chars.length;
+  const waitingOnKey = it => it.revealStart != null && !isTyped(it) && it.isKey[it.pos];
+  function resetReveals() { items.forEach(it => { it.revealStart = null; it.pos = 0; it.doneAt = null; }); songReset(); }
+
+  window.addEventListener('keydown', e => {
+    if (e.metaKey || e.ctrlKey || e.altKey || e.key.length !== 1) return;
+    if (e.key === ' ') e.preventDefault();
+    if (e.repeat || boom) return;          // holding a key down (for a long note) only types it once
+    const it = items.find(waitingOnKey);
+    if (!it) return;
+    if (e.key.toLowerCase() === it.chars[it.pos].ch.toLowerCase()) {
+      // the song: a right letter plays the next note of the tune, a space plays a soft bass note
+      if (it.chars[it.pos].ch === ' ') songBass(e.code, items.indexOf(it));
+      else e._song = songNote(it, it.pos);
+      it.pos++; it.lastKey = performance.now();
+      // punctuation straight after (like the ' in WE'VE) goes in at once, so fast typing never trips on it
+      while (!isTyped(it) && !it.isKey[it.pos] && !/[a-z0-9 ]/i.test(it.chars[it.pos].ch)) it.pos++;
+      if (!isTyped(it) && !it.isKey[it.pos]) it.nextAt = it.lastKey + 120; // word finished: the poem carries on typing itself
+      if (isTyped(it)) it.doneAt = it.lastKey;
+    } else {
+      it.wrongAt = performance.now();
+      e._song = 'wrong'; // a wrong key only makes a quiet little note
+    }
+  });
+
+  function drawCursor(it, line, k, x, y, solid) {
+    const now = performance.now();
+    if (!solid && Math.floor(now / BLINK_MS) % 2) return; // blink off
+    const cx = k > 0 ? line.ends[k - 1] + Math.round(it.cursor.w * 0.25) : line.x + 4 * dpr;
+    octx.save();
+    octx.globalAlpha = now - it.wrongAt < 180 ? 0.35 : 1; // a wrong key makes the cursor flicker dim
+    octx.fillStyle = TEXT_COLOR;
+    octx.fillRect(x + cx, Math.round(y + line.mid - it.cursor.h / 2), it.cursor.w, it.cursor.h);
+    octx.restore();
+  }
+
+  // the part of one line from character k0 up to (not including) k1, in text-canvas pixels
+  function charSpan(line, k0, k1) {
+    k1 = Math.min(k1, line.ends.length); // (the space where a line wraps has no width of its own)
+    const x0 = k0 > 0 ? line.ends[k0 - 1] : line.x;
+    return [x0, line.ends[k1 - 1] - x0];
+  }
+  // draws what's been typed so far, the faint key words still to come, and the cursor
+  function drawTyping(it, x, y, signed, now) {
+    // typed so far: full white
+    it.typedLines.forEach((line, li) => {
+      const n = Math.max(0, Math.min(line.ends.length, it.pos - it.lineStart[li]));
+      if (!n) return;
+      const [sx, w] = charSpan(line, 0, n);
+      octx.drawImage(it.src, sx, line.y, w, line.h, x + sx, y + line.y, w, line.h);
+    });
+    // still to come: faint. the line being waited on pulses faster and brighter as it rises toward the fail line
+    const waiting = waitingOnKey(it);
+    const danger = waiting && it.el.classList.contains('poem-line') ? Math.max(0, Math.min(1, -signed / -FAIL_LINE)) : 0;
+    const pulse = 0.5 + 0.5 * Math.sin(now / (260 - 200 * danger));
+    const from = it.chars[it.pos];
+    if (from) {
+      octx.save();
+      octx.globalAlpha = GHOST + 0.5 * danger * pulse;
+      it.typedLines.forEach((line, li) => {
+        const k0 = li < from.li ? line.ends.length : li === from.li ? Math.min(from.k, line.ends.length) : 0;
+        if (k0 >= line.ends.length) return;
+        const [sx, w] = charSpan(line, k0, line.ends.length);
+        octx.drawImage(it.src, sx, line.y, w, line.h, x + sx, y + line.y, w, line.h);
+      });
+      octx.restore();
+    }
+    if (it.revealStart == null) return; // not its turn yet
+    const c = it.chars[it.pos];
+    drawCursor(it, it.typedLines[c.li], c.k, x, y, !waiting || now - it.lastKey < 500);
+  }
+
+  function drawText() {
+    const vh = window.innerHeight;
+    const now = performance.now();
+    octx.clearRect(0, 0, overlay.width, overlay.height);
+    if (boom) return; // the words have been blown apart
+
+    nextUntyped = null;    // the scrolling eases off as the next untyped line reaches the center
+    activeSigned = null;
+    waitingForKey = false; // ...unless a key word is waiting on the visitor: then it doesn't wait for anyone
+    let prevDone = true;   // has the line before this one finished?
+    let rowReady = true, roleDone = true; // credits: a row's role and name type at the same time
+    items.forEach((it, idx) => {
+      const r = it.el.getBoundingClientRect();
+      const signed = (r.top + r.height / 2 - vh / 2) / (vh / 2); // <0 above center, >0 below
+
+      // its turn: the previous line is done and this one is close enough to center
+      const ready = introOpen && (it.isName ? rowReady : prevDone); // nothing types until the intro video has pixelated away enough
+      // (a poem line is ready as soon as the one before it is typed, wherever it is: fast typing pulls the page along)
+      if (it.revealStart == null && ready && (signed < REVEAL_LINE || idx === 0 || atBottom || it.el.classList.contains('poem-line'))) { it.revealStart = now; it.nextAt = now; songLine(idx); }
+
+      // the automatic typing: carries on letter by letter until it reaches a key word
+      if (it.revealStart != null) {
+        while (!isTyped(it) && !it.isKey[it.pos] && now >= it.nextAt) { it.nextAt += it.delays[it.pos]; it.pos++; }
+        if (it.isKey[it.pos] && it.nextAt < now) it.nextAt = now; // (don't bank up time while waiting)
+        if (isTyped(it) && it.doneAt === null) it.doneAt = now;
+      }
+      const typed = isTyped(it), waiting = waitingOnKey(it);
+      if (waiting) {
+        if (!waitingForKey) activeSigned = signed;
+        waitingForKey = true;
+        // (too slow: no explosion any more. the page just stops and waits for you, see HOLD_LINE)
+      }
+      // the next line waits for this one (lines already scrolled far off the top never block it)
+      const done = (typed && now - it.doneAt >= it.gap) || signed < -1;
+      if (!typed && signed > -1 && (nextUntyped === null || signed < nextUntyped)) nextUntyped = signed;
+      if (it.isRole) { rowReady = prevDone; roleDone = done; prevDone = done; }
+      else if (it.isName) prevDone = done && roleDone; // next row waits for both columns
+      else prevDone = done;
+
+      if (r.bottom < 0 || r.top > vh || !introOpen) return;
+      const x = Math.round(r.left * dpr);
+      const y = Math.round(r.top * dpr);
+
+      if (typed) {
+        // fully typed. above center = already read: it disintegrates
+        if (signed < 0) dissolveItem(it, Math.min(1, -signed / DISSOLVE_SPAN), x, y);
+        else octx.drawImage(it.src, x, y);
+        // cursor sits blinking at the end for a moment before the next line takes over
+        if (now - it.doneAt < it.gap && signed >= 0) {
+          const last = it.typedLines[it.typedLines.length - 1];
+          drawCursor(it, last, last.ends.length, x, y, false);
+        }
+      } else {
+        drawTyping(it, x, y, signed, now);
+      }
+    });
+  }
+
+  // ---- blowing up: too slow, and it all goes. the words burst apart into burning pixels, there's a flash
+  // and a deep boom, then it fades to black and the poem starts over from the top ----
+  const BOOM_MS = 5500;       // how long the explosion lasts before the poem starts again
+  const BOOM_FIRE = 900;      // how many burning pixels burst out
+  const BOOM_CELL = 5;        // size of the flying pixels, px
+  let boom = null, waitingForKey = false, activeSigned = null; // activeSigned: where the line being typed is (0 = center)
+  const boomCanvas = document.createElement('canvas');
+  boomCanvas.id = 'boom';
+  Object.assign(boomCanvas.style, { position: 'fixed', top: 0, left: 0, width: '100vw', height: '100vh',
+    zIndex: 3, pointerEvents: 'none' });
+  document.body.appendChild(boomCanvas);
+  const bctx = boomCanvas.getContext('2d');
+
+  function blowUp(it) {
+    if (boom) return;
+    const now = performance.now();
+    const r = it.el.getBoundingClientRect();
+    const cx = r.left + r.width / 2, cy = r.top + r.height / 2; // it bursts out from the word that was missed
+    const parts = [];
+    // the words on screen break into pixels and fly
+    const W = overlay.width, H = overlay.height, step = Math.max(1, Math.round(BOOM_CELL * dpr));
+    const data = octx.getImageData(0, 0, W, H).data;
+    for (let y = 0; y < H; y += step) for (let x = 0; x < W; x += step) {
+      if (data[(y * W + x) * 4 + 3] < 60) continue;
+      const px = x / dpr, py = y / dpr, a = Math.atan2(py - cy, px - cx), sp = 150 + Math.random() * 650;
+      parts.push({ x: px, y: py, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp - 150, life: 0,
+        max: 1.5 + Math.random() * 2, text: true });
+    }
+    // and a burst of fire from where the word was
+    for (let i = 0; i < BOOM_FIRE; i++) {
+      const a = Math.random() * Math.PI * 2, sp = 100 + Math.pow(Math.random(), 0.6) * 1100;
+      parts.push({ x: cx, y: cy, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp - 120, life: 0,
+        max: 0.8 + Math.random() * 2.2, heat: Math.random() });
+    }
+    boom = { at: now, parts, cx, cy };
+    Object.keys(heldNotes).forEach(noteOff);
+    boomSound();
+  }
+
+  function boomSound() {
+    if (!audioCtx || audioCtx.state !== 'running') return;
+    const ac = audioCtx, t = ac.currentTime;
+    // a deep thud that drops away
+    const o = ac.createOscillator(), og = ac.createGain();
+    o.frequency.setValueAtTime(90, t); o.frequency.exponentialRampToValueAtTime(24, t + 1.8);
+    og.gain.setValueAtTime(0.0001, t); og.gain.exponentialRampToValueAtTime(1.2, t + 0.02);
+    og.gain.exponentialRampToValueAtTime(0.0001, t + 2.5);
+    o.connect(og); og.connect(mixBus); og.connect(hallBus); o.start(t); o.stop(t + 2.6);
+    // and a roar of noise that darkens as it fades, into the hall
+    const len = ac.sampleRate * 4, buf = ac.createBuffer(2, len, ac.sampleRate);
+    for (let ch = 0; ch < 2; ch++) { const d = buf.getChannelData(ch); for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1; }
+    const n = ac.createBufferSource(); n.buffer = buf;
+    const f = ac.createBiquadFilter(); f.type = 'lowpass';
+    f.frequency.setValueAtTime(5000, t); f.frequency.exponentialRampToValueAtTime(120, t + 3.5);
+    const ng = ac.createGain();
+    ng.gain.setValueAtTime(0.0001, t); ng.gain.exponentialRampToValueAtTime(0.9, t + 0.01);
+    ng.gain.exponentialRampToValueAtTime(0.0001, t + 3.8);
+    n.connect(f); f.connect(ng); ng.connect(mixBus); ng.connect(hallBus); n.start(t); n.stop(t + 4);
+  }
+
+  let lastBoom = null;
+  function boomFrame(now) {
+    requestAnimationFrame(boomFrame);
+    const dt = lastBoom === null ? 0 : Math.min(0.05, (now - lastBoom) / 1000);
+    lastBoom = now;
+    const W = window.innerWidth, H = window.innerHeight;
+    if (boomCanvas.width !== W || boomCanvas.height !== H) { boomCanvas.width = W; boomCanvas.height = H; }
+    bctx.clearRect(0, 0, W, H);
+    if (!boom) return;
+    const t = (now - boom.at) / 1000;
+    // the flash, and a red glow that fades off behind it
+    if (t < 1.2) {
+      bctx.globalAlpha = Math.max(0, 1 - t / 0.35);
+      bctx.fillStyle = '#fff'; bctx.fillRect(0, 0, W, H);
+      const g = bctx.createRadialGradient(boom.cx, boom.cy, 0, boom.cx, boom.cy, Math.max(W, H) * (0.3 + t));
+      g.addColorStop(0, 'rgba(255,160,40,0.8)'); g.addColorStop(1, 'rgba(120,0,0,0)');
+      bctx.globalAlpha = Math.max(0, 1 - t / 1.2);
+      bctx.fillStyle = g; bctx.fillRect(0, 0, W, H);
+    }
+    // the flying pixels: slowed by the air, pulled down, cooling and fading. the letters catch fire as they go
+    const drag = Math.exp(-1.6 * dt);
+    for (const p of boom.parts) {
+      p.life += dt;
+      if (p.life >= p.max) continue;
+      p.vx *= drag; p.vy = p.vy * drag + 260 * dt;
+      p.x += p.vx * dt; p.y += p.vy * dt;
+      const f = p.life / p.max;
+      bctx.globalAlpha = (1 - f) * (0.7 + 0.3 * Math.random());
+      bctx.fillStyle = p.text
+        ? (f < 0.15 ? '#fff' : `hsl(${45 - 40 * f}, 100%, ${85 - 50 * f}%)`)
+        : `hsl(${(1 - f) * (20 + 35 * p.heat)}, 100%, ${70 - 40 * f}%)`;
+      bctx.fillRect(Math.round(p.x), Math.round(p.y), BOOM_CELL, BOOM_CELL);
+    }
+    // then everything fades to black before the poem starts again
+    const fadeFrom = BOOM_MS / 1000 - 1.5;
+    if (t > fadeFrom) { bctx.globalAlpha = Math.min(1, (t - fadeFrom) / 1.2); bctx.fillStyle = '#000'; bctx.fillRect(0, 0, W, H); }
+    bctx.globalAlpha = 1;
+  }
+  requestAnimationFrame(boomFrame);
+
+  buildItems();
+  if (document.fonts && document.fonts.ready) document.fonts.ready.then(buildItems);
+  window.addEventListener('resize', buildItems);
+  window.addEventListener('scroll', drawText, { passive: true });
+
+  // ---- intro: the page opens on a video playing in the middle of the screen. it plays clearly for a moment,
+  // then slowly pixelates into bigger and bigger blocks, then the blocks disappear from the center outward,
+  // with a scattered edge, until it's gone. the video file goes in the same folder as this page ----
+  const INTRO_START = 0;             // where in the video it starts, in seconds (25 = 0:25)
+  const INTRO_WIDTH = 0.84;          // 0-1: how much of the screen's width the video takes up
+  const INTRO_HOLD_MS = 2500;        // how long the video plays clearly before it starts pixelating
+  const INTRO_PIXELATE_MS = 7000;    // how long it takes to pixelate completely (higher = slower)
+  const INTRO_BLOCKS = [2, 3, 4, 5, 6, 8, 10, 12, 16, 20, 24, 32]; // the block sizes it steps through, in px (last = fully pixelated)
+  const INTRO_BURN_MS = 8000;        // then how long the hole takes to spread from the center to the edges (higher = slower)
+  const INTRO_TEXT_MS = 11000;       // when the opening line starts typing (over the video), ms after the video starts
+  const INTRO_WAIT_MS = 6000;        // if the video hasn't started playing by now, skip the intro
+
+  let introDone = false;  // the video is completely gone
+  let introOpen = false;  // far enough along for the text to start typing
+  (function intro() {
+    const cv = document.getElementById('intro');
+    const ctx2 = cv.getContext('2d');
+    const vid = document.getElementById('intro-src');
+    let t0 = null;
+
+    function finish() {
+      if (introDone) return;
+      introDone = true; introOpen = true;
+      cv.remove(); vid.pause(); vid.remove();
+    }
+    window.skipIntro = finish; // (the hidden skip button uses this)
+    const giveUp = setTimeout(() => { if (t0 === null) finish(); }, INTRO_WAIT_MS); // no video (or it won't play): skip the intro
+    vid.addEventListener('error', e => { // the file is missing or can't be played (once every option has been tried)
+      if (e.target === vid || e.target === vid.querySelector('source:last-of-type')) finish();
+    }, true);
+    vid.addEventListener('loadedmetadata', () => { if (INTRO_START) vid.currentTime = INTRO_START; vid.play().catch(finish); });
+    vid.addEventListener('playing', () => {
+      if (t0 !== null || introDone) return;
+      clearTimeout(giveUp); t0 = performance.now(); requestAnimationFrame(step);
+    });
+    vid.load();
+
+    function place(W, H) { // where the video sits: centered, keeping its shape, never taller than the screen
+      const aspect = (vid.videoWidth || 16) / (vid.videoHeight || 9);
+      const w = Math.min(W * INTRO_WIDTH, H * 0.95 * aspect), h = w / aspect;
+      return [Math.round((W - w) / 2), Math.round((H - h) / 2), Math.round(w), Math.round(h)];
+    }
+
+    // the video shrunk to one pixel per block, then blown back up with hard edges = pixelated
+    const small = document.createElement('canvas'), sctx = small.getContext('2d');
+    let holes = null, holesData = null;
+
+    function step(now) {
+      if (introDone) return;
+      const W = window.innerWidth, H = window.innerHeight;
+      if (cv.width !== W || cv.height !== H) { cv.width = W; cv.height = H; }
+      const since = now - t0 - INTRO_HOLD_MS;
+      const pix = Math.min(1, Math.max(0, since / INTRO_PIXELATE_MS));                  // 0 sharp -> 1 fully pixelated
+      const burn = Math.max(0, (since - INTRO_PIXELATE_MS) / INTRO_BURN_MS);           // 0 all blocks -> 1 none left
+      if (burn >= 1) { finish(); return; }
+      if (now - t0 >= INTRO_TEXT_MS) introOpen = true;
+      requestAnimationFrame(step);
+
+      const [x0, y0, w, h] = place(W, H);
+      ctx2.clearRect(0, 0, W, H);
+      cv.style.background = 'transparent';
+      if (since <= 0) { ctx2.drawImage(vid, x0, y0, w, h); return; } // sharp to begin with
+
+      // pixelating: steps up through the block sizes, slowly at first
+      const B = INTRO_BLOCKS[Math.min(INTRO_BLOCKS.length - 1, Math.floor(Math.pow(pix, 1.3) * INTRO_BLOCKS.length))];
+      const cols = Math.ceil(w / B), rows = Math.ceil(h / B);
+      if (small.width !== cols || small.height !== rows) { small.width = cols; small.height = rows; }
+      sctx.imageSmoothingQuality = 'high';
+      sctx.drawImage(vid, 0, 0, cols, rows); // (every frame, so the video keeps moving while it pixelates)
+      ctx2.save();
+      ctx2.beginPath(); ctx2.rect(x0, y0, w, h); ctx2.clip();
+      ctx2.imageSmoothingEnabled = false;
+      ctx2.drawImage(small, 0, 0, cols, rows, x0, y0, cols * B, rows * B);
+      ctx2.restore();
+      if (burn <= 0) return;
+
+      // then the blocks disappear from the center outward; each goes at a slightly random moment,
+      // so the edge of the hole is a scattered, pixelated one
+      if (!holes || holes.width !== cols || holes.height !== rows) { // one pixel per block: solid = still there
+        holes = document.createElement('canvas'); holes.width = cols; holes.height = rows;
+        holesData = holes.getContext('2d').createImageData(cols, rows);
+      }
+      const hd = holesData.data, cx = w / 2, cy = h / 2, maxD = Math.hypot(cx, cy);
+      for (let by = 0; by < rows; by++) {
+        for (let bx = 0; bx < cols; bx++) {
+          const d = Math.hypot((bx + 0.5) * B - cx, (by + 0.5) * B - cy) / maxD; // 0 center, 1 corners
+          const goes = 0.75 * d + 0.15 * hash(bx, by, 7) + 0.1 * noise(bx * B / 120, by * B / 120, 8);
+          hd[(by * cols + bx) * 4 + 3] = burn * 1.05 < goes ? 255 : 0;
+        }
+      }
+      holes.getContext('2d').putImageData(holesData, 0, 0);
+      ctx2.save();
+      ctx2.globalCompositeOperation = 'destination-in'; // keep only the blocks that are still there
+      ctx2.imageSmoothingEnabled = false;
+      ctx2.drawImage(holes, 0, 0, cols, rows, x0, y0, cols * B, rows * B);
+      ctx2.restore();
+    }
+  })();
+
+  // ---- the ending: "and wait for green to answer" ----
+  // once the last line is typed the fire dies down to black. one small green pixel waits below the words.
+  // pressing and holding grows green out from under your finger; let go and it slowly gives way again.
+  const ENDING_MS = 30000;  // how long the quiet ending waits for someone to hold the green before it all starts over
+  const GREEN_TOUCH = 70;   // how close to the green pixel you have to press for it to count, px
+  const GREEN_HOLD_MS = 3000; // how long you have to hold the green before the question appears
+  const QUESTION = 'NOW WRITE YOUR OWN.'; // the words that come up at the very end
+  const DIE_MS = 4000;      // how long the fire takes to die down
+  const GREEN_CELL = 12;    // size of each green pixel, px
+  const GREEN_GROW = 40;    // how fast the green spreads while you hold, px per second
+  const GREEN_MAX = 170;    // how far it can spread, px
+  const GREEN_FADE = 0.6;   // how fast it shrinks back after letting go (compared with growing)
+  const GREENS = ['#0b3d1a', '#14572a', '#1f7a38', '#2e9e48', '#5cc46a', '#a6e3a1'];
+
+  let ending = null; // when the ending began (null = not yet)
+  let asked = null;  // when the question appeared (null = not yet). once it's up, the page stays on it
+
+  // is this spot (screen px) on the green? the waiting pixel, or anywhere the green has already spread to
+  function onGreen(x, y) {
+    const W = Math.ceil(window.innerWidth / GREEN_CELL), H = Math.ceil(window.innerHeight / GREEN_CELL);
+    const gx = (Math.floor(W / 2) + 0.5) * GREEN_CELL, gy = (Math.floor(H * 0.62) + 0.5) * GREEN_CELL;
+    const nearPixel = Math.hypot(x - gx, y - gy) <= GREEN_TOUCH;
+    const inGrowth = green.r > 0 && Math.hypot(x - douse.x, y - douse.y) <= green.r + 20;
+    return nearPixel || inGrowth;
+  }
+
+  // ---- after you've held the green long enough: it dies out, pixel by pixel, until everything is black,
+  // and then the words come on ----
+  const GREEN_DIE_MS = 1500;  // how long the green takes to die out
+  const BLACK_PAUSE_MS = 1200; // then this long in the black before the words start typing
+
+  // the question: the green dies out to black, and then the words type out big
+  function askQuestion() {
+    asked = performance.now();
+    green.active = false;
+    const box = document.createElement('div');
+    box.id = 'question';
+    box.innerHTML = '<div class="q-col"><div class="q-words"></div><div class="w-poem"></div></div>';
+    const words = box.querySelector('.q-words');
+    const chars = [];
+    // the words go in pairs that never split ("NOW WRITE" / "YOUR OWN."), so no word is ever left on a line by itself.
+    // an odd word out joins the last pair
+    const all = QUESTION.split(' ');
+    const groups = [];
+    for (let i = 0; i < all.length; i += 2) groups.push(all.slice(i, i + 2));
+    if (groups.length > 1 && groups[groups.length - 1].length === 1) groups[groups.length - 2].push(groups.pop()[0]);
+    groups.forEach((g, gi) => {
+      const group = document.createElement('span'); group.className = 'q-group';
+      g.forEach((w, wi) => {
+        const word = document.createElement('span'); word.className = 'q-word';
+        [...w].forEach(ch => { const c = document.createElement('span'); c.className = 'q-char'; c.textContent = ch; word.appendChild(c); chars.push(c); });
+        group.appendChild(word);
+        if (wi < g.length - 1) group.appendChild(document.createTextNode(' '));
+      });
+      words.appendChild(group);
+      if (gi < groups.length - 1) words.appendChild(document.createTextNode(' '));
+    });
+    const cursor = document.createElement('span'); cursor.className = 'q-cursor';
+    document.body.appendChild(box);
+    // once the green has died out and it's all black, the words type out, letter by letter, with the same blinking cursor as the rest of the page
+    let i = 0, wait = GREEN_DIE_MS + BLACK_PAUSE_MS;
+    (function typeNext() {
+      setTimeout(() => {
+        const c = chars[i++];
+        c.classList.add('on');
+        c.after(cursor); // the cursor sits just after the last letter typed
+        if (i < chars.length) {
+          const nextIsNewWord = chars[i].parentNode !== c.parentNode;
+          wait = CHAR_MS * (0.6 + 0.8 * Math.random()) + (/[?,.!]/.test(c.textContent) ? PUNCT_PAUSE_MS : 0) + (nextIsNewWord ? CHAR_MS : 0);
+          typeNext();
+        } else { box.classList.add('q-done'); setTimeout(() => startWriting(box, cursor), WRITE_PAUSE_MS); }
+      }, wait);
+    })();
+  }
+
+  // ---- writing your own: after "NOW WRITE YOUR OWN." the cursor drops to a new line, poem-sized, and it's the
+  // visitor's turn. every letter plays the next note of a tune (a new chord swells in under each line), a space
+  // plays a soft bass note, the fire comes back behind the words, and the page slowly drifts up as the poem grows.
+  // Enter starts a new line at one of the poem's indents (Enter on an empty line leaves a gap); Backspace deletes.
+  const WRITE_PAUSE_MS = 1200;  // after the words finish typing, this beat before the cursor drops to the new line
+  const WRITE_FIRE = 0.6;       // how strong the background fire comes back while writing (1 = as strong as the end of the poem)
+  const WRITE_INDENTS = [0, 3, 6, 9, 12]; // each new line starts at one of these indents, in em, like the poem ([0] = no indents)
+  const WRITE_HOLD_LINE = 0.4;  // the page drifts up until the line you're on is this far down the screen (0 = top, 1 = bottom)
+  const WRITE_PHRASE = 24;      // letters per rise and fall of the tune
+
+  let writing = null; // when the writing began (null = not yet)
+  let wCol = null, wPoem = null, wCursor = null, wLines = [], wScroll = 0, wVel = 0, wLast = null;
+
+  function startWriting(box, cursor) {
+    writing = performance.now();
+    const col = box.querySelector('.q-col');
+    const top = col.getBoundingClientRect().top;
+    box.style.animation = 'none'; box.style.background = 'transparent'; // the black lifts so the fire can show through
+    box.classList.add('writing');
+    col.style.top = top + 'px'; // the words stay exactly where they are; from here the drift moves them
+    overlay.style.display = 'none'; // the first poem's last lines stay hidden
+    wCol = col; wPoem = box.querySelector('.w-poem'); wCursor = cursor;
+    newLine();
+    songLine(0);
+  }
+  function newLine() {
+    const prev = wLines[wLines.length - 1];
+    let indent = 0;
+    if (prev) do indent = WRITE_INDENTS[Math.floor(Math.random() * WRITE_INDENTS.length)];
+      while (WRITE_INDENTS.length > 1 && indent === prev.indent);
+    const el = document.createElement('div'); el.className = 'w-line';
+    el.style.marginLeft = indent + 'em';
+    wPoem.appendChild(el);
+    wLines.push({ el, text: '', indent });
+    renderLine(wLines.length - 1);
+    if (prev) renderLine(wLines.length - 2); // (takes the cursor off the line before)
+  }
+  function renderLine(i) { // each word stretched taller, like the rest of the page, with the cursor at the end of the last line
+    const L = wLines[i];
+    L.el.textContent = '';
+    L.text.split(/( +)/).forEach(part => {
+      if (!part) return;
+      if (part[0] === ' ') { L.el.appendChild(document.createTextNode(part)); return; }
+      const w = document.createElement('span'); w.className = 'q-word'; w.textContent = part; L.el.appendChild(w);
+    });
+    if (i === wLines.length - 1) L.el.appendChild(wCursor);
+  }
+  function pokeCursor() { // solid while typing, blinking again once you pause
+    wCursor.classList.add('solid');
+    clearTimeout(pokeCursor.t);
+    pokeCursor.t = setTimeout(() => wCursor.classList.remove('solid'), 500);
+  }
+  // the tune for your own words: the same kind of arch and chord-following as the poem's song
+  function writeNote(li, nth, prev) {
+    const chord = chordOf(li);
+    const f = (nth % WRITE_PHRASE) / (WRITE_PHRASE - 1);
+    const target = 2 + 5 * Math.sin(Math.PI * f) + (li % 3 === 2 ? 1 : 0);
+    const r = hash(songCount++, 7, 31);
+    if (!/[a-z0-9]/i.test(prev)) songDeg = nearestChordTone(chord, (songDeg + target) / 2); // start of a word
+    else {
+      const dir = Math.sign(Math.round(target) - songDeg) || (r < 0.5 ? -1 : 1);
+      if (r < 0.18) { /* stay on the same note */ }
+      else if (r < 0.32) songDeg -= dir;
+      else songDeg += dir;
+    }
+    songDeg = Math.max(0, Math.min(SONG_SCALE.length - 1, songDeg));
+    songRepeats = songDeg === songNote.last ? songRepeats + 1 : 0;
+    if (songRepeats >= 2) { songDeg += songDeg >= SONG_SCALE.length - 2 ? -1 : 1; songRepeats = 0; }
+    songNote.last = songDeg;
+    return SONG_SCALE[songDeg];
+  }
+  // (capture, so it runs before the piano and hands it the tune's next note)
+  window.addEventListener('keydown', e => {
+    if (writing === null || !wLines.length || e.metaKey || e.ctrlKey || e.altKey) return;
+    const li = wLines.length - 1, L = wLines[li];
+    if (e.key === 'Backspace') {
+      e.preventDefault();
+      if (L.text.length) { L.text = L.text.slice(0, -1); renderLine(li); }
+      else if (li > 0) { L.el.remove(); wLines.pop(); renderLine(li - 1); }
+      pokeCursor();
+      return;
+    }
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      if (e.repeat) return;
+      newLine(); pokeCursor();
+      songLine(li + 1);              // a new line: the next chord swells in
+      songBass('Enter', li + 1);
+      return;
+    }
+    if (e.key.length !== 1) return;
+    e.preventDefault();
+    if (e.repeat) return;            // holding a key types it once (and lets the note ring)
+    const prev = L.text.slice(-1) || ' ';
+    if (e.key === ' ') songBass('Space', li);
+    else if (/[a-z]/i.test(e.key) && e.code in PIANO_FREQS) e._song = writeNote(li, L.text.replace(/[^a-z0-9]/gi, '').length, prev);
+    L.text += e.key;
+    renderLine(li); pokeCursor();
+  }, true);
+
+  // the drift: the page keeps slowly rising while the line you're on is below WRITE_HOLD_LINE,
+  // and hurries a little when you've written your way down toward the bottom of the screen
+  function writeFrame(now) {
+    requestAnimationFrame(writeFrame);
+    const dt = wLast === null ? 0 : Math.min(0.1, (now - wLast) / 1000);
+    wLast = now;
+    if (writing === null || !wCursor) return;
+    const vh = window.innerHeight, cr = wCursor.getBoundingClientRect(), y = cr.top + cr.height / 2;
+    const target = y > vh * WRITE_HOLD_LINE ? TYPE_SCROLL_SPEED + Math.max(0, y / vh - 0.6) * 600 : 0;
+    wVel += (target - wVel) * Math.min(1, dt * 3);
+    wScroll += wVel * dt;
+    wCol.style.transform = `translateY(${-wScroll}px)`;
+  }
+  requestAnimationFrame(writeFrame);
+
+  const green = { active: false, r: 0 };
+  function endFade(now) {
+    if (writing !== null) return 0; // writing your own: no background fire, only the note lines
+    return ending === null ? 1 : Math.max(0, 1 - (now - ending) / DIE_MS);
+  }
+
+  const greenCanvas = document.createElement('canvas');
+  greenCanvas.id = 'green';
+  Object.assign(greenCanvas.style, { position: 'fixed', top: 0, left: 0, width: '100vw', height: '100vh',
+    zIndex: 1, pointerEvents: 'none', imageRendering: 'pixelated' });
+  document.body.appendChild(greenCanvas);
+  const grctx = greenCanvas.getContext('2d');
+  let lastGreen = null, greenDirty = false;
+
+  function greenFrame(now) {
+    requestAnimationFrame(greenFrame);
+    const dt = lastGreen === null ? 0 : Math.min(0.1, (now - lastGreen) / 1000);
+    lastGreen = now;
+    const W = Math.ceil(window.innerWidth / GREEN_CELL), H = Math.ceil(window.innerHeight / GREEN_CELL);
+    if (greenCanvas.width !== W || greenCanvas.height !== H) { greenCanvas.width = W; greenCanvas.height = H; }
+    if (greenDirty) { grctx.clearRect(0, 0, W, H); greenDirty = false; }
+    document.body.classList.toggle('ended', ending !== null && writing === null); // (everything but the green fades to black)
+    document.body.classList.toggle('writing-own', writing !== null); // (the background pixels stay hidden while writing your own)
+    if (ending === null || writing !== null) { green.r = 0; return; } // (gone once the writing starts)
+    greenDirty = true;
+    const t = (now - ending) / 1000;
+
+    if (green.active && !asked && now - green.heldAt >= GREEN_HOLD_MS) askQuestion(); // held long enough
+    // once it's been held long enough, the green stops where it is and dies out, its pixels going dark at random
+    const dying = asked ? Math.min(1, (now - asked) / GREEN_DIE_MS) : 0;
+    if (asked && dying >= 1) return; // all gone: just black
+    if (!asked) green.r = green.active ? Math.min(GREEN_MAX, green.r + GREEN_GROW * dt)
+                                       : Math.max(0, green.r - GREEN_GROW * GREEN_FADE * dt);
+
+    // the one green pixel, breathing faintly. it only comes once everything else has gone completely black
+    if (t > DIE_MS / 1000) {
+      const appear = Math.min(1, (t - DIE_MS / 1000) / 2);
+      grctx.globalAlpha = appear * (1 - dying) * (0.35 + 0.45 * (0.5 + 0.5 * Math.sin(t * 1.7)));
+      grctx.fillStyle = GREENS[4];
+      grctx.fillRect(Math.floor(W / 2), Math.floor(H * 0.62), 1, 1);
+    }
+
+    // green spreading out from under the finger: ragged, flickering at its edge
+    if (green.r > 0) {
+      const cx = douse.x / GREEN_CELL, cy = douse.y / GREEN_CELL, rc = green.r / GREEN_CELL;
+      for (let y = Math.floor(cy - rc); y <= cy + rc; y++) {
+        for (let x = Math.floor(cx - rc); x <= cx + rc; x++) {
+          const d = Math.hypot(x + 0.5 - cx, y + 0.5 - cy);
+          const reach = rc * (0.45 + 0.55 * hash(x, y, 5)); // each pixel needs a different amount of time to come in
+          if (d > reach) continue;
+          if (hash(x, y, 13) < dying * 1.05) continue;    // dying out: each pixel goes dark at its own moment
+          const edge = 1 - d / Math.max(1, reach);        // 0 at its edge ... 1 well inside
+          if (Math.random() > 0.55 + edge - dying * 0.7) continue; // the edge flickers (and everything flickers more as it dies)
+          grctx.globalAlpha = 0.5 + 0.5 * Math.min(1, edge * 2);
+          grctx.fillStyle = GREENS[Math.min(GREENS.length - 1, Math.floor(hash(x, y, 9) * 4 + edge * 2))];
+          grctx.fillRect(x, y, 1, 1);
+        }
+      }
+    }
+    grctx.globalAlpha = 1;
+  }
+  requestAnimationFrame(greenFrame);
+
+  // ---- auto scroll ----
+  const SCROLL_SPEED = 60; // pixels per second (higher = faster)
+  const HOLD_LINE = -0.35; // how far above center an untyped line can rise before the page stops to wait for you (0 = center, -1 = top)
+  const START_HOLD_MS = 300; // after the opening line finishes typing, this short beat before scrolling starts
+  let started = false, startTyped = null, startedAt = 0;
+  let bgStartAt = null; // when the background fire began (it starts as soon as the opening line is typed)
+  const BG_EASE_MS = 8000;   // once scrolling starts, how long until the fire is at full strength
+  const BG_START = 0.004;    // how much fire there is the moment scrolling starts (tiny = just 1-3 pixels flashing)
+  function bgEase(now) { // tiny -> 1, slow at first and building faster (ease-in)
+    if (bgStartAt === null) return 0;
+    const k = Math.min(1, (now - bgStartAt) / BG_EASE_MS);
+    return (BG_START + (1 - BG_START) * k * k) * endFade(now); // and dies away in the ending
+  }
+  let scrollPos = 0, scrollVel = 0;
+  let lastTime = null;
+
+  function autoScroll(now) {
+    requestAnimationFrame(autoScroll);
+    if (lastTime === null) { lastTime = now; return; }
+    const dt = (now - lastTime) / 1000;
+    lastTime = now;
+
+    const maxScroll = document.documentElement.scrollHeight - window.innerHeight;
+    if (!started) { // at the top: wait for the opening line to finish typing, then a short pause
+      const first = items[0];
+      const typed = !first || isTyped(first);
+      if (typed && bgStartAt === null) bgStartAt = now; // the background fire starts right away, even through the photo's hole
+      if (typed && startTyped === null) startTyped = now;
+      if (startTyped !== null && now - startTyped >= START_HOLD_MS) { started = true; startedAt = now; }
+    }
+    // glide to a stop if the typing falls behind, and glide back up to speed when it catches up
+    // full speed while the next line is far below; slows to a stop as it reaches the center, waits while it types
+    // (but a key word waiting on the visitor doesn't hold the page up: it keeps scrolling)
+    const ease = waitingForKey || nextUntyped === null ? 1 : Math.max(0, Math.min(1, (nextUntyped - WAIT_LINE + 0.02) / 0.3));
+    const last = items[items.length - 1];
+    if (ending === null && started && last && isTyped(last)) ending = now;
+    const typingPoem = items.length > 1 && items[1].revealStart != null; // the poem has started: slow and steady from here
+    // while typing, the page also speeds up to bring the line you're on up toward the middle if you're ahead
+    const catchUp = activeSigned === null ? 0 : Math.max(0, activeSigned - 0.25) * 160;
+    // a line still waiting for you that has risen to HOLD_LINE: the page stops and waits until you type it
+    const holding = typingPoem && waitingForKey && activeSigned !== null && activeSigned < HOLD_LINE;
+    const targetVel = started && ending === null && !boom && !holding ? (typingPoem ? TYPE_SCROLL_SPEED + catchUp : SCROLL_SPEED * ease) : 0; // the ending holds still
+    scrollVel += (targetVel - scrollVel) * Math.min(1, dt * 3);
+    scrollPos += scrollVel * dt;
+    atBottom = scrollPos >= maxScroll - 1;
+    if (scrollPos >= maxScroll) scrollPos = maxScroll;
+    // after the ending has had its time (and nobody is still holding on), start over from the top
+    const boomOver = boom && now - boom.at >= BOOM_MS;
+    if (boomOver || (ending !== null && !asked && now - ending >= ENDING_MS && !green.active && green.r <= 0)) {
+      boom = null;
+      scrollPos = 0; scrollVel = 0; ending = null; started = false; startTyped = null; bgStartAt = null;
+      douse.anger = 0; resetReveals(); clearPile();
+    }
+    window.scrollTo(0, scrollPos);
+    drawText();
+  }
+  requestAnimationFrame(autoScroll);
+
+  // ---- skipping to the end: press the down arrow key (or click the hidden spot in the top right corner) ----
+  // everything counts as typed, the page jumps to the bottom, and the ending ("and wait for green to answer") begins
+  function skipToEnd() {
+    if (ending !== null || asked) return; // already there
+    const now = performance.now();
+    if (window.skipIntro) window.skipIntro();
+    boom = null;
+    items.forEach(it => { if (it.revealStart == null) it.revealStart = now; it.pos = it.chars.length; it.doneAt = now - 10000; });
+    started = true; startTyped = startTyped ?? now; startedAt = startedAt || now;
+    if (bgStartAt === null) bgStartAt = now - BG_EASE_MS;
+    scrollPos = Math.max(0, document.documentElement.scrollHeight - window.innerHeight); scrollVel = 0;
+    window.scrollTo(0, scrollPos);
+  }
+  window.addEventListener('keydown', e => {
+    if (e.key !== 'ArrowDown' || e.metaKey || e.ctrlKey || e.altKey) return;
+    e.preventDefault(); // (instead of scrolling the page a little)
+    skipToEnd();
+  }, true);
+  const skip = document.createElement('div'); // the hidden spot in the corner (a faint dot shows when the mouse is over it)
+  skip.id = 'skip';
+  skip.title = 'skip to the end';
+  document.body.appendChild(skip);
+  const skipPress = e => { e.stopPropagation(); e.preventDefault(); skipToEnd(); }; // (so it doesn't also count as pressing on the fire)
+  skip.addEventListener('pointerdown', skipPress);
+  skip.addEventListener('click', skipPress);
+
+  // ---- musical typing: the number keys play notes, like GarageBand ----
+  // the number keys 1 2 3 4 5 6 7 8 9 0 play a pentatonic scale, from middle C up. it has no clashing notes,
+  // so any keys pressed together or one after another always sound good together. hold a key to let it ring.
+  const NOTE_KEYS = ['Digit1','Digit2','Digit3','Digit4','Digit5','Digit6','Digit7','Digit8','Digit9','Digit0'];
+  //                    C4      D4      E4      G4      A4      C5      D5      E5      G5      A5
+  const NOTE_FREQS = [261.63, 293.66, 329.63, 392.00, 440.00, 523.25, 587.33, 659.25, 783.99, 880.00];
+  const NOTE_VOLUME = 0.3;   // 0 to 1
+  const NOTE_ATTACK = 0.35;  // seconds the note takes to swell in (higher = softer, more floating)
+  const NOTE_RELEASE = 3;    // seconds the note takes to fade after letting go of the key
+  const NOTE_DETUNE = 9;     // how far apart the voices drift, in cents (more = wider, more shimmery)
+  const NOTE_SHIMMER = 0.18; // 0-1: how loud the faint octave-up shimmer is
+  const NOTE_REVERB = 0.95;  // 0-1: how much of the sound is the hall reverb (more = further away, dreamier)
+  const NOTE_REVERB_SECS = 10; // how long the hall rings for, in seconds (more = a bigger space)
+  const NOTE_ECHO = 0.35;    // 0-1: how loud the repeating echoes are
+  const NOTE_ECHO_REPEATS = 0.45; // 0-1: how much each echo carries into the next (higher = longer trails; keep under 0.8)
+  const NOTE_ECHO_SECS = 0.42; // time between echoes
+
+  let audioCtx = null, notesOut = null, mixBus = null, hallBus = null; // mixBus/hallBus: shared with the letter-key piano
+  const heldNotes = {}; // key -> the note playing right now
+  function hallImpulse(ac, secs) { // a made-up reverb: soft noise that dies away slowly, different in each ear
+    const len = Math.floor(ac.sampleRate * secs), buf = ac.createBuffer(2, len, ac.sampleRate);
+    for (let ch = 0; ch < 2; ch++) {
+      const d = buf.getChannelData(ch);
+      let lp = 0;
+      for (let i = 0; i < len; i++) {
+        lp += 0.35 * ((Math.random() * 2 - 1) - lp); // a little darker than pure noise
+        const swell = Math.min(1, i / (ac.sampleRate * 0.08)); // blooms in softly over the first moment
+        d[i] = lp * swell * Math.pow(1 - i / len, 3);
+      }
+    }
+    return buf;
+  }
+  function noteAudio() {
+    if (!audioCtx) {
+      const ac = audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      const comp = ac.createDynamicsCompressor(); // keeps chords from getting harsh
+      comp.connect(ac.destination);
+      notesOut = ac.createGain();
+      notesOut.gain.value = NOTE_VOLUME;
+      const dry = ac.createGain(); dry.gain.value = 1 - NOTE_REVERB * 0.6;
+      notesOut.connect(dry); dry.connect(comp);
+      // the hall
+      const hall = ac.createConvolver(); hall.buffer = hallImpulse(ac, NOTE_REVERB_SECS);
+      const wet = ac.createGain(); wet.gain.value = NOTE_REVERB * 1.6;
+      notesOut.connect(hall); hall.connect(wet); wet.connect(comp);
+      // echoes that bounce between left and right and get softer and darker each time, then into the hall
+      const dl = ac.createDelay(2), dr = ac.createDelay(2);
+      dl.delayTime.value = NOTE_ECHO_SECS; dr.delayTime.value = NOTE_ECHO_SECS;
+      const fb = ac.createGain(); fb.gain.value = NOTE_ECHO_REPEATS;
+      const dark = ac.createBiquadFilter(); dark.type = 'lowpass'; dark.frequency.value = 2200;
+      const pl = ac.createStereoPanner(), pr = ac.createStereoPanner(); pl.pan.value = -0.7; pr.pan.value = 0.7;
+      const echoIn = ac.createGain(); echoIn.gain.value = NOTE_ECHO;
+      notesOut.connect(echoIn); echoIn.connect(dl);
+      dl.connect(pl); dl.connect(dr); dr.connect(pr); dr.connect(dark); dark.connect(fb); fb.connect(dl);
+      [pl, pr].forEach(p => { p.connect(comp); p.connect(hall); });
+      mixBus = comp; hallBus = hall;
+    }
+    if (audioCtx.state === 'suspended') audioCtx.resume();
+    return audioCtx;
+  }
+  function noteOn(key, freq) {
+    const ac = noteAudio(), t = ac.currentTime;
+    const amp = ac.createGain();
+    const tone = ac.createBiquadFilter(); // soft and airy: the top end opens up slowly as the note swells
+    tone.type = 'lowpass'; tone.Q.value = 0.5;
+    tone.frequency.setValueAtTime(freq * 1.5, t);
+    tone.frequency.exponentialRampToValueAtTime(freq * 6, t + NOTE_ATTACK * 3);
+    amp.gain.setValueAtTime(0.0001, t);
+    amp.gain.exponentialRampToValueAtTime(1, t + NOTE_ATTACK);          // slow swell in
+    amp.gain.exponentialRampToValueAtTime(0.7, t + NOTE_ATTACK + 2);    // then floats while held
+    // a gentle vibrato that fades in, so held notes start to waver
+    const lfo = ac.createOscillator(), lfoAmt = ac.createGain();
+    lfo.frequency.value = 4.2 + Math.random() * 1.2;
+    lfoAmt.gain.setValueAtTime(0, t);
+    lfoAmt.gain.linearRampToValueAtTime(6, t + 1.5); // in cents
+    lfo.connect(lfoAmt); lfo.start(t);
+    // the voices: [wave, pitch multiple, detune in cents, level, left/right]
+    const voices = [
+      ['sine', 1, 0, 0.8, 0],
+      ['triangle', 1, -NOTE_DETUNE, 0.35, -0.6],
+      ['triangle', 1, NOTE_DETUNE, 0.35, 0.6],
+      ['sine', 2, NOTE_DETUNE * 0.5, NOTE_SHIMMER, -0.3], // shimmer an octave up
+      ['sine', 2, -NOTE_DETUNE * 0.5, NOTE_SHIMMER, 0.3],
+      ['sine', 0.5, 0, 0.18, 0],                          // a soft low bed under it
+    ];
+    const oscs = voices.map(([type, mult, cents, level, pan]) => {
+      const o = ac.createOscillator(), g = ac.createGain(), p = ac.createStereoPanner();
+      o.type = type; o.frequency.value = freq * mult; o.detune.value = cents;
+      lfoAmt.connect(o.detune);
+      g.gain.value = level; p.pan.value = pan;
+      o.connect(g); g.connect(p); p.connect(tone); o.start(t);
+      return o;
+    });
+    oscs.push(lfo);
+    tone.connect(amp); amp.connect(notesOut);
+    heldNotes[key] = { amp, oscs };
+    startNoteLine(key);
+  }
+  function noteOff(key) {
+    const n = heldNotes[key];
+    if (!n) return;
+    delete heldNotes[key];
+    const t = audioCtx.currentTime;
+    n.amp.gain.cancelScheduledValues(t);
+    n.amp.gain.setValueAtTime(Math.max(0.0001, n.amp.gain.value), t);
+    n.amp.gain.exponentialRampToValueAtTime(0.0001, t + NOTE_RELEASE);
+    n.oscs.forEach(o => o.stop(t + NOTE_RELEASE + 0.05));
+    endNoteLine(key);
+  }
+
+  // ---- the notes, drawn: each press draws a pixel line that grows for as long as you hold ----
+  // the lines stand upright: low notes on the left, high notes on the right.
+  // after letting go, the line burns up.
+  const LINE_CELL = 10;        // size of each pixel of the line, px
+  const LINE_GROW = 26;        // how fast the line grows while held, pixels per second
+  const LINE_THICK = 1;        // how many pixels thick each line is
+  const LINE_MIN = 0.55;       // 0-1: even a quick tap drags a line at least this far down the screen
+  const LINE_DRAG = 0.25;      // 0-1: after letting go, a line keeps dragging on this much further (of the screen height)
+  const LINE_DIRECTION = 'down'; // 'up' = lines grow upward, 'down' = they grow downward
+  const LINE_HOLD_MS = 1500;   // how long after pressing the key the start of the line catches fire
+  const LINE_BURN_SPEED = 11;  // how fast the fire runs along the line, pixels per second
+                               // (keep it below LINE_GROW, so the fire chases the note without catching it)
+  const LINE_EMBER_MS = 700;   // how long each pixel burns before it's gone
+  const LINE_ASH = 0.3;        // 0-1: chance of each burnt pixel falling as ash onto the heap at the bottom
+  const LINE_SPARKS = 0.15;    // 0-1: chance of a spark flying off each pixel as it catches
+  // the line colours: low notes lean red, then orange, gold, yellow, lime, and the highest lean green and teal-green,
+  // but every line gets its own random twist of shade, richness and brightness, so no two look quite alike.
+  // (no purple or pink, and the only blue is the occasional soft sky blue below:
+  //  otherwise the colours stay between LINE_HUE_MIN and LINE_HUE_MAX on the colour wheel)
+  const LINE_HUE_MIN = 0;      // 0 = red
+  const LINE_HUE_MAX = 165;    // 165 = teal-green, just before blue starts
+  const LINE_HUE_SPREAD = 80;  // how far a line's colour can wander from its note's colour (higher = more variety)
+  // now and then a line comes out a soft, pale sky blue instead (gentle, never neon). a little more often on high notes
+  const LINE_BLUE_CHANCE = 0.12; // 0-1: how often (0 = never)
+  const lineColor = f => { // f: 0 = lowest note ... 1 = highest
+    if (Math.random() < LINE_BLUE_CHANCE * (0.5 + f)) {
+      const hue = 192 + Math.random() * 16;    // sky blue, not deep or purple-ish
+      const sat = 45 + Math.random() * 20;     // soft, not neon
+      const light = 70 + Math.random() * 10;   // light and airy
+      return `hsl(${hue.toFixed(0)}, ${sat.toFixed(0)}%, ${light.toFixed(0)}%)`;
+    }
+    const hue = Math.max(LINE_HUE_MIN, Math.min(LINE_HUE_MAX,
+      LINE_HUE_MIN + (LINE_HUE_MAX - LINE_HUE_MIN) * f + (Math.random() - 0.5) * LINE_HUE_SPREAD));
+    const sat = 100;                        // always fully vivid
+    const light = 50 + Math.random() * 10;  // 50% is the purest, most saturated a colour can be; a touch above it glows
+    return `hsl(${hue.toFixed(0)}, ${sat.toFixed(0)}%, ${light.toFixed(0)}%)`;
+  };
+  const LINE_COLORS = NOTE_KEYS.map((_, i) => lineColor(i / (NOTE_KEYS.length - 1)));
+
+  const lineCanvas = document.createElement('canvas');
+  lineCanvas.id = 'note-lines';
+  Object.assign(lineCanvas.style, { position: 'fixed', top: 0, left: 0, width: '100vw', height: '100vh',
+    zIndex: 2, pointerEvents: 'none', imageRendering: 'pixelated' });
+  document.body.appendChild(lineCanvas);
+  const lctx = lineCanvas.getContext('2d');
+  const noteLines = [];   // every line on screen
+  const liveLines = {};   // key -> the line still growing
+  let lineSeed = 0;
+
+  // where each key sits across a normal keyboard, in key widths from the left edge. the rows are a little
+  // staggered, just like the real thing, so Q is a bit right of 1, A a bit right of Q, Z a bit right of A
+  const KEY_ROWS = [
+    { from: 1,    keys: ['Digit1','Digit2','Digit3','Digit4','Digit5','Digit6','Digit7','Digit8','Digit9','Digit0'] },
+    { from: 1.5,  keys: ['KeyQ','KeyW','KeyE','KeyR','KeyT','KeyY','KeyU','KeyI','KeyO','KeyP'] },
+    { from: 1.75, keys: ['KeyA','KeyS','KeyD','KeyF','KeyG','KeyH','KeyJ','KeyK','KeyL'] },
+    { from: 2.25, keys: ['KeyZ','KeyX','KeyC','KeyV','KeyB','KeyN','KeyM'] },
+  ];
+  const KEY_X = {};
+  KEY_ROWS.forEach(row => row.keys.forEach((k, i) => { KEY_X[k] = row.from + i; }));
+  const KEY_LEFT = Math.min(...Object.values(KEY_X)), KEY_RIGHT = Math.max(...Object.values(KEY_X));
+  // 0-1 across the screen for a key (0 = the far left key, 1 = the far right one)
+  const keyPlace = code => code in KEY_X ? (KEY_X[code] - KEY_LEFT) / (KEY_RIGHT - KEY_LEFT) : undefined;
+
+  // place: 0-1 across the screen (0 = left), color: the line's colour.
+  // number keys pass nothing and use their own place and colour; the letter keys pass theirs
+  function startNoteLine(key, place, color) {
+    const i = NOTE_KEYS.indexOf(key);
+    if (place === undefined) { place = keyPlace(key) ?? i / (NOTE_KEYS.length - 1); color = lineColor(i / (NOTE_KEYS.length - 1)); } // a fresh shade every press
+    const W = lineCanvas.width, H = lineCanvas.height;
+    // its column: low notes on the left, high on the right, with a little wobble so repeated notes don't stack exactly
+    const left = Math.floor(W * 0.1), right = Math.floor(W * 0.9);
+    const col = Math.round(left + (right - left) * place) + Math.round((Math.random() - 0.5) * 2);
+    // where it starts: near the bottom edge (growing up) or near the top edge (growing down)
+    const LINE_START_SPREAD = 0.12; // 0-1: how far from the edge a line can start (0 = always right at the edge)
+    const y = LINE_DIRECTION === 'up' ? H - 2 - Math.floor(Math.random() * H * LINE_START_SPREAD)
+                                      : 1 + Math.floor(Math.random() * H * LINE_START_SPREAD);
+    const line = { color, col, y, start: performance.now(), end: null, seed: lineSeed++ };
+    noteLines.push(line);
+    liveLines[key] = line;
+  }
+  function endNoteLine(key) {
+    const line = liveLines[key];
+    if (line) { line.end = performance.now(); delete liveLines[key]; }
+  }
+
+  // burning up: soon after the note starts, fire runs along the line from where it started, chasing the tip.
+  // each pixel flares white-yellow, cools through orange and red to a dark ember, then is gone,
+  // and a few sparks drift up off it.
+  const sparks = [];
+  function burnColor(f) { // f: 0 = just caught ... 1 = burnt out
+    const hue = 55 * Math.pow(1 - f, 1.4);   // yellow -> orange -> red
+    const light = 92 - 72 * f;               // white-hot -> dark ember
+    return `hsl(${hue}, 100%, ${light}%)`;
+  }
+
+  function noteLineFrame(now) {
+    requestAnimationFrame(noteLineFrame);
+    const W = Math.ceil(window.innerWidth / LINE_CELL), H = Math.ceil(window.innerHeight / LINE_CELL);
+    if (lineCanvas.width !== W || lineCanvas.height !== H) { lineCanvas.width = W; lineCanvas.height = H; }
+    lctx.clearRect(0, 0, W, H);
+    const dt = lastLineFrame === null ? 0 : Math.min(0.1, (now - lastLineFrame) / 1000);
+    lastLineFrame = now;
+    const up = LINE_DIRECTION === 'up';
+
+    for (let n = noteLines.length - 1; n >= 0; n--) {
+      const L = noteLines[n];
+      const room = up ? L.y + 1 : H - L.y; // stops at the edge of the screen
+      // while the key is held the line grows steadily. after letting go it keeps dragging on down the page,
+      // easing to a stop, so even a quick tap leaves a long streak of colour (and a long hold an even longer one)
+      if (L.len === undefined) L.len = 0;
+      if (L.end === null) L.len += LINE_GROW * dt;
+      else {
+        if (L.target === undefined) L.target = Math.max(L.len + LINE_DRAG * H, LINE_MIN * H);
+        const left = L.target - L.len;
+        if (left > 0) L.len += Math.min(left, LINE_GROW * Math.max(0.12, Math.min(1, left / (H * 0.12))) * dt);
+      }
+      L.len = Math.min(room, L.len);
+      const len = Math.max(1, Math.ceil(L.len));
+      const growing = L.end === null || (L.target !== undefined && L.len < Math.min(room, L.target) - 0.01);
+      // how long the fire has been running along this line (negative = not lit yet).
+      // it catches shortly after the key goes down, so the line burns behind the note while it's still playing
+      const burning = (now - L.start - LINE_HOLD_MS) / 1000;
+      if (!growing && burning > (len + 4) / LINE_BURN_SPEED + LINE_EMBER_MS / 1000) { noteLines.splice(n, 1); continue; }
+      // sparks fly off the pixels the fire has just reached
+      if (burning >= 0) {
+        const reached = Math.min(len, Math.floor(burning * LINE_BURN_SPEED) + 1);
+        for (let k = (L.reached || 0); k < reached; k++) {
+          if (Math.random() < LINE_SPARKS) {
+            const px = L.col + Math.floor(Math.random() * LINE_THICK), py = up ? L.y - k : L.y + k;
+            sparks.push({ x: px + 0.5, y: py, vx: (Math.random() - 0.5) * 4, vy: -(6 + Math.random() * 10), life: 0, max: 0.5 + Math.random() * 0.9 });
+          }
+        }
+        L.reached = reached;
+      }
+      for (let k = 0; k < len; k++) {
+        for (let t = 0; t < LINE_THICK; t++) {
+          const px = L.col + t, py = up ? L.y - k : L.y + k;
+          // the fire starts where the line began and runs along to the tip, a little unevenly
+          const lit = k / LINE_BURN_SPEED + 0.12 * hash(k, t, L.seed + 7);
+          const age = (burning - lit) / (LINE_EMBER_MS / 1000);
+          if (age >= 1) { // burnt away: some of it drops as ash, falling onto the heap
+            const id = k * LINE_THICK + t;
+            if (!L.ash) L.ash = new Set();
+            if (!L.ash.has(id)) {
+              L.ash.add(id);
+              if (Math.random() < LINE_ASH) dropFire((px + 0.5) * LINE_CELL, (py + 0.5) * LINE_CELL, { heat: 0.45 + Math.random() * 0.3 });
+            }
+            continue;
+          }
+          if (age < 0) { // not burning yet
+            const isHead = growing && k === len - 1; // the growing tip, bright and flickering
+            if (isHead) {
+              lctx.globalAlpha = 0.8 + Math.random() * 0.2;
+              lctx.fillStyle = '#fff';
+            } else { // the fire's heat is close, so it starts to glow
+              const near = Math.max(0, 1 + (burning - lit) * LINE_BURN_SPEED / 4); // within ~4 pixels of the flames
+              lctx.globalAlpha = near > 0 ? 0.85 + 0.15 * Math.random() * near : 1; // full strength, so the colour stays vivid
+              lctx.fillStyle = near > 0.5 && Math.random() < near * 0.6 ? burnColor(0.35) : L.color;
+            }
+            lctx.fillRect(px, py, 1, 1);
+            continue;
+          }
+          lctx.globalAlpha = (1 - age * age) * (0.7 + 0.3 * Math.random()); // flickering as it burns
+          lctx.fillStyle = burnColor(age);
+          // burning pixels sometimes lick upward, like a flame
+          const lick = age < 0.4 && Math.random() < 0.12 ? 1 : 0;
+          lctx.fillRect(px, py - lick, 1, 1);
+        }
+      }
+    }
+
+    // sparks: drift upward, wander a little, cool and fade
+    for (let i = sparks.length - 1; i >= 0; i--) {
+      const s = sparks[i];
+      s.life += dt;
+      if (s.life >= s.max) { sparks.splice(i, 1); continue; }
+      s.vx += (Math.random() - 0.5) * 12 * dt;
+      s.x += s.vx * dt; s.y += s.vy * dt;
+      const f = s.life / s.max;
+      lctx.globalAlpha = (1 - f) * (0.6 + 0.4 * Math.random());
+      lctx.fillStyle = burnColor(0.15 + 0.6 * f);
+      lctx.fillRect(Math.floor(s.x), Math.floor(s.y), 1, 1);
+    }
+    lctx.globalAlpha = 1;
+
+  }
+  let lastLineFrame = null;
+  requestAnimationFrame(noteLineFrame);
+  function noteKey(e) { // which note key this is (the number pad plays the same notes as the number row)
+    const pad = /^Numpad(\d)$/.exec(e.code);
+    const code = pad ? 'Digit' + pad[1] : e.code;
+    return NOTE_KEYS.includes(code) ? code : null;
+  }
+  window.addEventListener('keydown', e => {
+    const k = noteKey(e);
+    if (k === null || e.metaKey || e.ctrlKey || e.altKey) return;
+    e.preventDefault();
+    if (e.repeat || heldNotes[k]) return; // holding a key doesn't retrigger it
+    noteOn(k, NOTE_FREQS[NOTE_KEYS.indexOf(k)]);
+  });
+  window.addEventListener('keyup', e => { const k = noteKey(e); if (k !== null) noteOff(k); });
+  window.addEventListener('blur', () => Object.keys(heldNotes).forEach(noteOff)); // no stuck notes if you switch tabs
+
+  // ---- the letter keys: a plain synth piano, played alongside the dreamy number-key notes ----
+  // they use the same pentatonic scale as the numbers (C D E G A), so everything always harmonises.
+  // each keyboard row is its own stretch of the scale, overlapping like GarageBand's musical typing:
+  //   Z X C V B N M        -> low,    starting at the C below middle C
+  //   A S D F G H J K L    -> middle, starting at middle C
+  //   Q W E R T Y U I O P  -> high,   starting at the C above middle C
+  const PIANO_ROWS = [
+    { start: 130.81, keys: ['KeyZ','KeyX','KeyC','KeyV','KeyB','KeyN','KeyM'] },
+    { start: 261.63, keys: ['KeyA','KeyS','KeyD','KeyF','KeyG','KeyH','KeyJ','KeyK','KeyL'] },
+    { start: 523.25, keys: ['KeyQ','KeyW','KeyE','KeyR','KeyT','KeyY','KeyU','KeyI','KeyO','KeyP'] },
+  ];
+  const PIANO_VOLUME = 0.32;   // 0 to 1
+  const PIANO_RELEASE = 0.45;  // seconds the note takes to stop after letting go
+  const PIANO_ROOM = 0.85;     // 0-1: how much of the hall reverb it gets
+  const PIANO_ECHO = 0.6;      // 0-1: how loud the echoes are
+  const PIANO_ECHO_SECS = 0.38;// time between echoes
+  const PIANO_ECHO_REPEATS = 0.55; // 0-1: how much each echo carries into the next (higher = more, longer-lasting echoes)
+  const PENTATONIC = [0, 2, 4, 7, 9]; // semitones above C: C D E G A
+
+  const PIANO_FREQS = {}; // key -> note, in Hz
+  PIANO_ROWS.forEach(row => row.keys.forEach((k, i) => {
+    const semis = 12 * Math.floor(i / 5) + PENTATONIC[i % 5];
+    PIANO_FREQS[k] = row.start * Math.pow(2, semis / 12);
+  }));
+
+  let pianoOut = null;
+  const heldPiano = {};
+  function pianoOn(key, freq, opts = {}) { // opts.vol: loudness (1 = normal); opts.line: false = don't draw a line
+    const ac = noteAudio(), t = ac.currentTime;
+    if (!pianoOut) {
+      pianoOut = ac.createGain(); pianoOut.gain.value = PIANO_VOLUME;
+      const room = pianoRoom = ac.createGain(); room.gain.value = PIANO_ROOM;
+      pianoOut.connect(mixBus); pianoOut.connect(room); room.connect(hallBus);
+      // echoes that bounce left, right, left... each one a little quieter and darker, trailing off into the hall
+      const dl = ac.createDelay(2), dr = ac.createDelay(2);
+      dl.delayTime.value = PIANO_ECHO_SECS; dr.delayTime.value = PIANO_ECHO_SECS;
+      const fb = ac.createGain(); fb.gain.value = PIANO_ECHO_REPEATS;
+      const dark = ac.createBiquadFilter(); dark.type = 'lowpass'; dark.frequency.value = 2600;
+      const pl = ac.createStereoPanner(), pr = ac.createStereoPanner(); pl.pan.value = -0.8; pr.pan.value = 0.8;
+      const echoIn = ac.createGain(); echoIn.gain.value = PIANO_ECHO;
+      const echoRoom = ac.createGain(); echoRoom.gain.value = PIANO_ROOM;
+      pianoOut.connect(echoIn); echoIn.connect(dl);
+      dl.connect(pl); dl.connect(dr); dr.connect(pr); dr.connect(dark); dark.connect(fb); fb.connect(dl);
+      [pl, pr].forEach(p => { p.connect(mixBus); p.connect(echoRoom); });
+      echoRoom.connect(hallBus);
+    }
+    const amp = ac.createGain();
+    const tone = ac.createBiquadFilter(); // bright when struck, mellowing as it rings, like a piano string
+    tone.type = 'lowpass';
+    tone.frequency.setValueAtTime(Math.min(12000, freq * 10), t);
+    tone.frequency.exponentialRampToValueAtTime(freq * 2, t + 1.8);
+    amp.gain.setValueAtTime(0.0001, t);
+    amp.gain.exponentialRampToValueAtTime(1, t + 0.005);   // quick hammer strike
+    amp.gain.exponentialRampToValueAtTime(0.4, t + 0.35);  // a fast drop after the strike...
+    amp.gain.exponentialRampToValueAtTime(0.06, t + 5);    // ...then a slow fade even while held, like a real piano
+    const oscs = [['triangle', 1, 0, 1], ['sine', 2, 3, 0.35], ['sine', 3, -4, 0.12], ['sine', 4, 2, 0.05]].map(([type, mult, cents, level]) => {
+      const o = ac.createOscillator(), g = ac.createGain();
+      o.type = type; o.frequency.value = freq * mult; o.detune.value = cents; g.gain.value = level;
+      o.connect(g); g.connect(tone); o.start(t);
+      return o;
+    });
+    const vol = ac.createGain(); vol.gain.value = opts.vol ?? 1;
+    tone.connect(amp); amp.connect(vol); vol.connect(pianoOut);
+    heldPiano[key] = { amp, oscs };
+    if (opts.line === false) return;
+    // its pixel line: placed where the key is on the keyboard (left keys on the left, right keys on the right),
+    // and coloured by the note it plays, from low (red) to high (green)
+    const lo = Math.min(...Object.values(PIANO_FREQS)), hi = Math.max(...Object.values(PIANO_FREQS));
+    const f = Math.log(freq / lo) / Math.log(hi / lo);
+    startNoteLine(key, keyPlace(key) ?? f, lineColor(Math.max(0, Math.min(1, f))));
+  }
+  function pianoOff(key) {
+    const n = heldPiano[key];
+    if (!n) return;
+    delete heldPiano[key];
+    const t = audioCtx.currentTime;
+    n.amp.gain.cancelScheduledValues(t);
+    n.amp.gain.setValueAtTime(Math.max(0.0001, n.amp.gain.value), t);
+    n.amp.gain.exponentialRampToValueAtTime(0.0001, t + PIANO_RELEASE);
+    n.oscs.forEach(o => o.stop(t + PIANO_RELEASE + 0.05));
+    endNoteLine(key);
+  }
+  window.addEventListener('keydown', e => {
+    if (!(e.code in PIANO_FREQS) || e.metaKey || e.ctrlKey || e.altKey) return;
+    e.preventDefault();
+    if (e.repeat || heldPiano[e.code]) return;
+    if (e._song === 'wrong') pianoOn(e.code, PIANO_FREQS[e.code], { vol: 0.25, line: false });
+    else if (e._song) { pianoOn(e.code, e._song); bloomBellsFor(e._song); } // typing the poem: the next note of the song (with bells, if you're fast)
+    else pianoOn(e.code, PIANO_FREQS[e.code]);          // not typing: each letter's own note
+  });
+
+  // ---- the song: typing the poem plays a tune ----
+  // each right letter plays the next note of a melody instead of the letter's own note, so typing the poem
+  // plays a song, at whatever speed you type it. the song is the same every time, because it's worked out from
+  // the poem itself:
+  //   - every line of the poem brings a new chord (Am, F, C, G, round and round), swelling in softly underneath
+  //   - the tune rises and falls in an arch over each line, and the first letter of each word lands on a note of the chord
+  //   - the last letter of a line settles on the chord, like the end of a phrase
+  //   - each space plays a soft bass note, so the words fall into a rhythm
+  const SONG_CHORDS = [ // [name, pitches the tune leans on (0 = C ... 11 = B), the chord underneath in Hz]
+    ['Am', [9, 0, 4], [110.00, 130.81, 164.81, 220.00]],
+    ['F',  [9, 0],    [87.31, 130.81, 174.61, 220.00]],
+    ['C',  [0, 4, 7], [130.81, 164.81, 196.00, 261.63]],
+    ['G',  [7, 2],    [98.00, 146.83, 196.00, 246.94]],
+  ];
+  const SONG_VOLUME = 0.12;      // how loud the soft chords under each line are
+  const SONG_BASS_VOLUME = 0.5;  // how loud the bass notes on spaces are (compared with the tune)
+  // the tune's notes: the same five-note scale as the keys, from middle C up two octaves
+  const SONG_SCALE = [261.63, 293.66, 329.63, 392.00, 440.00, 523.25, 587.33, 659.25, 783.99, 880.00, 1046.50];
+  const SONG_PC = [0, 2, 4, 7, 9, 0, 2, 4, 7, 9, 0];
+  let songDeg = 4, songCount = 0, songPad = null, songRepeats = 0;
+  const chordOf = idx => SONG_CHORDS[idx % SONG_CHORDS.length]; // the opening line is on Am, then F, C, G, Am...
+
+  function songReset() { songDeg = 4; songCount = 0; if (songPad) { padOff(songPad); songPad = null; } if (bloomPad) { padOff(bloomPad); bloomPad = null; } if (bassPad) { padOff(bassPad); bassPad = null; } }
+  function nearestChordTone(chord, target) {
+    let best = songDeg, bestD = Infinity;
+    SONG_SCALE.forEach((_, d) => {
+      if (!chord[1].includes(SONG_PC[d])) return;
+      const dist = Math.abs(d - target) + (d === songDeg ? 0.6 : 0); // (rather move than repeat)
+      if (dist < bestD) { bestD = dist; best = d; }
+    });
+    return best;
+  }
+  function songNote(it, pos) {
+    const chord = chordOf(items.indexOf(it));
+    const letters = it.chars.filter(c => /[a-z0-9]/i.test(c.ch)).length;
+    const nth = it.chars.slice(0, pos).filter(c => /[a-z0-9]/i.test(c.ch)).length; // which letter of the line this is
+    const f = letters > 1 ? nth / (letters - 1) : 0.5;
+    const target = 2 + 5 * Math.sin(Math.PI * f) + (items.indexOf(it) % 3 === 2 ? 1 : 0); // the arch over the line
+    const prev = pos > 0 ? it.chars[pos - 1].ch : ' ';
+    const r = hash(songCount++, 7, 31);
+    if (nth === letters - 1) songDeg = nearestChordTone(chord, Math.min(target, 5)); // end of the line: settle on the chord
+    else if (!/[a-z0-9]/i.test(prev)) songDeg = nearestChordTone(chord, (songDeg + target) / 2); // start of a word
+    else {
+      const dir = Math.sign(Math.round(target) - songDeg) || (r < 0.5 ? -1 : 1);
+      if (r < 0.18) { /* stay on the same note */ }
+      else if (r < 0.32) songDeg -= dir;     // a little turn the other way
+      else songDeg += dir;                   // step toward the arch
+    }
+    songDeg = Math.max(0, Math.min(SONG_SCALE.length - 1, songDeg));
+    // never the same note more than twice in a row
+    songRepeats = songDeg === songNote.last ? songRepeats + 1 : 0;
+    if (songRepeats >= 2) { songDeg += songDeg >= SONG_SCALE.length - 2 ? -1 : 1; songRepeats = 0; }
+    songNote.last = songDeg;
+    return SONG_SCALE[songDeg];
+  }
+  function songBass(code, idx) {
+    const root = chordOf(idx)[2][0];
+    if (heldPiano[code]) pianoOff(code);
+    pianoOn(code, root, { vol: SONG_BASS_VOLUME, line: false });
+    bassHit(idx); // typing fast: a deep chord swells under every space
+  }
+  function songLine(idx) { // a new line: the next chord swells in underneath, the last one fades away
+    songChordIdx = idx; // (the beat's bass follows this)
+    if (!audioCtx || !mixBus) return;
+    if (songPad) padOff(songPad);
+    songPad = padOn(chordOf(idx)[2]);
+    bassPadOn(chordOf(idx)[2]);  // (and the low chord under it, heard only when you type fast)
+  }
+
+  // ---- the bloom: the faster you type, the more the music opens up ----
+  // typing slowly sounds just as before. pick up the pace and, bit by bit:
+  //   - a shimmering choir of high voices fades in above the chord, swaying softly
+  //   - every note of the tune rings out with soft bells an octave up, rolling up through the chord like a harp
+  //   - the piano sinks deeper into the hall reverb, and the drone underneath warms and brightens
+  // slow down and it all gently settles back.
+  const PACE_SLOW = 0.8;        // letters per second that still count as calm typing (nothing extra yet)
+  const PACE_FAST = 4.5;        // letters per second that count as typing flat out (the full bloom)
+  const PACE_WINDOW_MS = 1500;  // how far back it looks to measure your typing speed
+  const PACE_RISE = 0.08;       // how quickly the bloom opens as you speed up (higher = faster)
+  const PACE_FALL = 0.015;      // how slowly it settles back when you slow down (lower = lingers longer)
+  const BLOOM_SHIMMER = 0;      // the high shimmering voices: turned off (it was too shrill)
+  const BLOOM_BELLS = 0.45;     // how loud the bells on each note get at full bloom
+  const BLOOM_BASS = 0.8;     // how loud the low held bass chord gets at full bloom
+  const BLOOM_BASS_HIT = 0.7;   // how loud the low chord struck on each space gets at full bloom
+  const BLOOM_ROLL_MS = 85;     // time between the bells as they roll up the chord
+  const BLOOM_ROOM = 0.9;       // how much extra hall reverb the piano gets at full bloom
+
+  const typeTimes = [];         // when each recent letter was typed
+  let typePace = 0;             // 0-1: how fast you're typing right now, smoothed
+  window.addEventListener('keydown', e => {
+    if (e.repeat || e.metaKey || e.ctrlKey || e.altKey || e.key.length !== 1) return;
+    typeTimes.push(performance.now());
+  }, true);
+  function paceNow(now) { // 0 = calm (or not typing) ... 1 = typing flat out
+    while (typeTimes.length && now - typeTimes[0] > PACE_WINDOW_MS) typeTimes.shift();
+    const perSec = typeTimes.length / (PACE_WINDOW_MS / 1000);
+    return Math.max(0, Math.min(1, (perSec - PACE_SLOW) / (PACE_FAST - PACE_SLOW)));
+  }
+
+  let bloomShimmer = null, bloomBells = null, bloomPad = null, pianoRoom = null, droneTone = null;
+  let bloomBass = null, bloomHits = null, bassPad = null;
+  function bloomSetup() { // (once the sound has started)
+    if (bloomShimmer || !audioCtx || !mixBus) return !!bloomShimmer;
+    const ac = audioCtx;
+    bloomShimmer = ac.createGain(); bloomShimmer.gain.value = 0;
+    const sDry = ac.createGain(); sDry.gain.value = 0.35;
+    bloomShimmer.connect(sDry); sDry.connect(mixBus); bloomShimmer.connect(hallBus); // mostly hall: it floats above everything
+    bloomBells = ac.createGain(); bloomBells.gain.value = 1;
+    const bDry = ac.createGain(); bDry.gain.value = 0.5;
+    bloomBells.connect(bDry); bDry.connect(mixBus); bloomBells.connect(hallBus);
+    // the bass: warm, dark and low, mostly dry so it stays round and full
+    bloomBass = ac.createGain(); bloomBass.gain.value = 0;
+    const lowWet = ac.createGain(); lowWet.gain.value = 0.3;
+    bloomBass.connect(mixBus); bloomBass.connect(lowWet); lowWet.connect(hallBus);
+    bloomHits = ac.createGain(); bloomHits.gain.value = 1;
+    const hitWet = ac.createGain(); hitWet.gain.value = 0.45;
+    bloomHits.connect(mixBus); bloomHits.connect(hitWet); hitWet.connect(hallBus);
+    return true;
+  }
+  // the low chord for a line: its root down an octave, the fifth, and the root again (Am, F, C, G under the poem)
+  const bassNotes = freqs => [freqs[0] / 2, freqs[0] * 0.75, freqs[0]]; // (e.g. Am: A1, E2, A2 — all low)
+  // held underneath while you type fast, changing with every line
+  function bassPadOn(freqs) {
+    if (!bloomSetup()) return;
+    const ac = audioCtx, t = ac.currentTime;
+    if (bassPad) padOff(bassPad);
+    const amp = ac.createGain();
+    amp.gain.setValueAtTime(0.0001, t);
+    amp.gain.exponentialRampToValueAtTime(1, t + 1.2);
+    const tone = ac.createBiquadFilter(); tone.type = 'lowpass'; tone.frequency.value = 200; tone.Q.value = 0.5; // only the low end gets through
+    tone.connect(amp); amp.connect(bloomBass);
+    const oscs = [];
+    bassNotes(freqs).forEach((fq, i) => [-3, 3].forEach(c => {
+      const o = ac.createOscillator(), g = ac.createGain(), p = ac.createStereoPanner();
+      o.type = i === 1 ? 'triangle' : 'sine'; o.frequency.value = fq; o.detune.value = c; // soft, round waves (no buzz)
+      g.gain.value = (i === 0 ? 0.55 : 0.3); p.pan.value = c < 0 ? -0.2 : 0.2;
+      o.connect(g); g.connect(p); p.connect(tone); o.start(t); oscs.push(o);
+    }));
+    bassPad = { amp, oscs };
+  }
+  // struck on each space while you type fast: a deep, soft chord that swells and rings out
+  function bassHit(idx) {
+    if (typePace < 0.12 || !bloomSetup()) return;
+    const ac = audioCtx, t = ac.currentTime;
+    const vol = BLOOM_BASS_HIT * Math.pow(typePace, 1.1);
+    const amp = ac.createGain(), tone = ac.createBiquadFilter();
+    tone.type = 'lowpass'; tone.Q.value = 0.7;
+    tone.frequency.setValueAtTime(400, t); tone.frequency.exponentialRampToValueAtTime(150, t + 1.2);
+    amp.gain.setValueAtTime(0.0001, t);
+    amp.gain.exponentialRampToValueAtTime(vol, t + 0.02);
+    amp.gain.exponentialRampToValueAtTime(0.0001, t + 2.6);
+    tone.connect(amp); amp.connect(bloomHits);
+    bassNotes(chordOf(idx)[2]).forEach((fq, i) => {
+      const o = ac.createOscillator(), g = ac.createGain();
+      o.type = 'sine'; o.frequency.value = fq; g.gain.value = i === 0 ? 0.7 : 0.4;
+      o.connect(g); g.connect(tone); o.start(t + i * 0.012); o.stop(t + 2.7);
+    });
+  }
+  // the shimmer: the chord's notes one and two octaves up, soft sines that sway in and out
+  function bloomPadOn(freqs) {
+    if (!bloomSetup()) return;
+    const ac = audioCtx, t = ac.currentTime;
+    if (bloomPad) padOff(bloomPad);
+    const amp = ac.createGain();
+    amp.gain.setValueAtTime(0.0001, t);
+    amp.gain.exponentialRampToValueAtTime(1, t + 1.5);
+    amp.connect(bloomShimmer);
+    const oscs = [];
+    freqs.slice(1).forEach((fq, i) => [2].forEach(mult => [-7, 7].forEach(c => { // one octave up only (two octaves up was too shrill)
+      const o = ac.createOscillator(), g = ac.createGain(), p = ac.createStereoPanner();
+      o.type = 'sine'; o.frequency.value = fq * mult; o.detune.value = c;
+      // each voice swells and fades on its own slow sway
+      const sway = ac.createOscillator(), swayAmt = ac.createGain();
+      sway.frequency.value = 0.15 + Math.random() * 0.35; swayAmt.gain.value = 0.4 / (freqs.length * mult);
+      g.gain.value = 0.6 / (freqs.length * mult);
+      sway.connect(swayAmt); swayAmt.connect(g.gain);
+      p.pan.value = (c < 0 ? -1 : 1) * (0.3 + 0.15 * i);
+      o.connect(g); g.connect(p); p.connect(amp);
+      o.start(t); sway.start(t); oscs.push(o, sway);
+    })));
+    bloomPad = { amp, oscs };
+  }
+  // the bells: a note of the tune, rung soft and high, then rolling up through the scale above it
+  function bell(freq, at, vol) {
+    const ac = audioCtx;
+    const o = ac.createOscillator(), o2 = ac.createOscillator(), g = ac.createGain(), g2 = ac.createGain(), p = ac.createStereoPanner();
+    o.type = 'sine'; o.frequency.value = freq;
+    o2.type = 'sine'; o2.frequency.value = freq * 3; g2.gain.value = 0.12; // a faint glassy overtone
+    g.gain.setValueAtTime(0.0001, at);
+    g.gain.exponentialRampToValueAtTime(vol, at + 0.008);
+    g.gain.exponentialRampToValueAtTime(0.0001, at + 3.2);
+    p.pan.value = (Math.random() - 0.5) * 1.4;
+    o.connect(g); o2.connect(g2); g2.connect(g); g.connect(p); p.connect(bloomBells);
+    o.start(at); o2.start(at); o.stop(at + 3.3); o2.stop(at + 3.3);
+  }
+  function bloomBellsFor(freq) {
+    if (typePace < 0.08 || !bloomSetup()) return;
+    const ac = audioCtx, t = ac.currentTime;
+    const deg = SONG_SCALE.indexOf(freq);
+    const vol = BLOOM_BELLS * Math.pow(typePace, 1.2);
+    bell(freq * 2, t, vol); // the note itself, an octave up
+    // the faster you type, the further the bells roll up the scale above it (always in tune with everything)
+    const extra = typePace > 0.75 ? 3 : typePace > 0.4 ? 2 : typePace > 0.2 ? 1 : 0;
+    for (let n = 1; n <= extra && deg >= 0; n++) {
+      const up = SONG_SCALE[Math.min(SONG_SCALE.length - 1, deg + 2 * n)];
+      bell(up * 2, t + n * BLOOM_ROLL_MS / 1000, vol * (0.75 - 0.12 * n));
+    }
+  }
+  // keeps everything following how fast you're typing
+  setInterval(() => {
+    const target = paceNow(performance.now());
+    typePace += (target - typePace) * (target > typePace ? PACE_RISE : PACE_FALL);
+    if (!bloomSetup()) return;
+    const t = audioCtx.currentTime, p = typePace;
+    bloomShimmer.gain.setTargetAtTime(BLOOM_SHIMMER * p * p, t, 0.4);
+    bloomBass.gain.setTargetAtTime(BLOOM_BASS * Math.pow(p, 1.3), t, 0.5);
+    if (pianoRoom) pianoRoom.gain.setTargetAtTime(PIANO_ROOM + BLOOM_ROOM * p, t, 0.4);
+    if (droneTone) droneTone.frequency.setTargetAtTime(650 + 1100 * p, t, 0.6);
+  }, 30);
+  function padOn(freqs) { // a soft, slow chord, mostly reverb
+    const ac = audioCtx, t = ac.currentTime;
+    const amp = ac.createGain();
+    amp.gain.setValueAtTime(0.0001, t);
+    amp.gain.exponentialRampToValueAtTime(SONG_VOLUME, t + 1.8);
+    const tone = ac.createBiquadFilter(); tone.type = 'lowpass'; tone.frequency.value = 1400;
+    const wet = ac.createGain(); wet.gain.value = 0.9;
+    tone.connect(amp); amp.connect(mixBus); amp.connect(wet); wet.connect(hallBus);
+    const oscs = [];
+    freqs.forEach((fq, i) => [-6, 6].forEach(c => {
+      const o = ac.createOscillator(), p = ac.createStereoPanner(), g = ac.createGain();
+      o.type = 'triangle'; o.frequency.value = fq; o.detune.value = c;
+      g.gain.value = 1 / freqs.length; p.pan.value = c < 0 ? -0.5 : 0.5;
+      o.connect(g); g.connect(p); p.connect(tone); o.start(t); oscs.push(o);
+    }));
+    return { amp, oscs };
+  }
+  function padOff(pad) {
+    const t = audioCtx.currentTime;
+    pad.amp.gain.cancelScheduledValues(t);
+    pad.amp.gain.setValueAtTime(Math.max(0.0001, pad.amp.gain.value), t);
+    pad.amp.gain.exponentialRampToValueAtTime(0.0001, t + 3.5);
+    pad.oscs.forEach(o => o.stop(t + 3.6));
+  }
+  // ---- the heartbeat: a low, muffled lub-dub in the back ----
+  // it comes in when the poem starts, calm and slow, and beats faster and harder as the poem goes on.
+  // when a line you haven't finished is rising toward the top (about to blow up), it races.
+  // in the ending it slows down and fades away; the explosion stops it dead.
+  // the lub carries the chord's bass note very faintly, so it stays in tune with the song.
+  const BEAT_ENABLED = true;    // false = no heartbeat at all
+  const BEAT_VOLUME = 0.55;     // 0 to 1
+  const HEART_START_BPM = 58;   // how fast it beats when the poem starts (a calm, resting heart)
+  const HEART_END_BPM = 84;     // ...and by the last lines
+  const HEART_PANIC_BPM = 45;   // how much faster it goes when an unfinished line is about to blow up
+  const HEART_DUB = 0.28;       // the gap between lub and dub, as a share of one beat
+  const HEART_TONE = 0.25;      // 0-1: how much of the chord's bass note is in the lub (0 = pure thump)
+  const BEAT_REVERB = 0.08;     // 0-1: a touch of the hall, so it sounds inside a body, not a room
+
+  let songChordIdx = 0; // which chord is playing (follows the lines of the poem)
+  let beatMaster = null, beatNext = 0, beatPlaying = false, beatFading = false, heartBpm = HEART_START_BPM;
+  function beatSetup(ac) {
+    beatMaster = ac.createGain(); beatMaster.gain.value = 0.0001;
+    const muffle = ac.createBiquadFilter(); muffle.type = 'lowpass'; muffle.frequency.value = 260; muffle.Q.value = 0.8; // heard through the chest
+    beatMaster.connect(muffle); muffle.connect(mixBus);
+    const send = ac.createGain(); send.gain.value = BEAT_REVERB; muffle.connect(send); send.connect(hallBus);
+  }
+  function thump(t, v, hi, len) { // one heart sound: a soft, deep knock that drops in pitch
+    const ac = audioCtx, o = ac.createOscillator(), g = ac.createGain();
+    o.type = 'sine';
+    o.frequency.setValueAtTime(hi, t); o.frequency.exponentialRampToValueAtTime(hi * 0.55, t + len * 0.6);
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(v, t + 0.012);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + len);
+    o.connect(g); g.connect(beatMaster); o.start(t); o.stop(t + len + 0.05);
+  }
+  function heartbeat(t, beat, strength) {
+    thump(t, 0.95 * strength, 72, 0.22);                         // lub: the deeper, stronger one
+    thump(t + beat * HEART_DUB, 0.6 * strength, 92, 0.16);       // dub: a little higher and softer
+    if (HEART_TONE > 0) { // the chord's bass note, felt more than heard
+      const ac = audioCtx, o = ac.createOscillator(), g = ac.createGain();
+      o.type = 'sine'; o.frequency.value = chordOf(songChordIdx)[2][0] / 2;
+      g.gain.setValueAtTime(0.0001, t);
+      g.gain.exponentialRampToValueAtTime(0.4 * HEART_TONE * strength, t + 0.03);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + beat * 0.7);
+      o.connect(g); g.connect(beatMaster); o.start(t); o.stop(t + beat * 0.7 + 0.05);
+    }
+  }
+  function beatTick() {
+    if (!BEAT_ENABLED || !audioCtx || !mixBus || audioCtx.state !== 'running') return;
+    const ac = audioCtx, now = performance.now();
+    if (!beatMaster) beatSetup(ac);
+    const poemOn = items.length > 1 && items[1].revealStart != null;
+    const fading = ending !== null && now - ending < DIE_MS * 1.5; // the ending: it slows and fades away
+    const want = poemOn && !boom && (ending === null || fading);
+    if (want && !beatPlaying) { // coming in: a slow fade up
+      beatPlaying = true; beatFading = false; heartBpm = HEART_START_BPM; beatNext = ac.currentTime + 0.1;
+      beatMaster.gain.cancelScheduledValues(ac.currentTime);
+      beatMaster.gain.setValueAtTime(0.0001, ac.currentTime);
+      beatMaster.gain.exponentialRampToValueAtTime(BEAT_VOLUME, ac.currentTime + 3);
+    }
+    if (!want && beatPlaying) { // stopped dead by the explosion, or gone once the ending has faded it out
+      beatPlaying = false;
+      beatMaster.gain.cancelScheduledValues(ac.currentTime);
+      beatMaster.gain.setValueAtTime(beatMaster.gain.value, ac.currentTime);
+      beatMaster.gain.linearRampToValueAtTime(0.0001, ac.currentTime + (boom ? 0.05 : 0.5));
+    }
+    if (!beatPlaying) return;
+    if (ending !== null && !beatFading) { // the ending: fade it out as the fire dies down
+      beatFading = true;
+      beatMaster.gain.cancelScheduledValues(ac.currentTime);
+      beatMaster.gain.setValueAtTime(beatMaster.gain.value, ac.currentTime);
+      beatMaster.gain.linearRampToValueAtTime(0.0001, ac.currentTime + DIE_MS * 1.5 / 1000);
+    }
+    // how fast it should be beating right now
+    let cur = 0; items.forEach((it, i) => { if (it.revealStart != null) cur = i; });
+    const k = items.length > 1 ? cur / (items.length - 1) : 0; // how far through the poem the typing has got
+    const danger = waitingForKey && activeSigned !== null && cur > 0 ? Math.max(0, Math.min(1, -activeSigned / -FAIL_LINE)) : 0;
+    let target = HEART_START_BPM + (HEART_END_BPM - HEART_START_BPM) * k + HEART_PANIC_BPM * danger * danger;
+    if (ending !== null) target = 40; // the ending: it slows right down
+    heartBpm += (target - heartBpm) * 0.04; // eases toward it, like a real heart, never jumping
+    if (beatNext < ac.currentTime) beatNext = ac.currentTime + 0.02; // (caught up after the tab was in the background)
+    while (beatNext < ac.currentTime + 0.15) {
+      const beat = 60 / heartBpm;
+      heartbeat(beatNext, beat, 0.75 + 0.25 * k + 0.2 * danger); // it beats harder as the poem goes on, and in a panic
+      beatNext += beat * (0.97 + Math.random() * 0.06); // never quite metronome-even
+    }
+  }
+  setInterval(beatTick, 25);
+  window.addEventListener('keyup', e => pianoOff(e.code));
+  window.addEventListener('blur', () => Object.keys(heldPiano).forEach(pianoOff));
+  // ---- the drone: a soft, endless bed of sound underneath everything, fading in very slowly ----
+  // low Cs and Gs with a high D and E floating on top (the same notes as the keys, so everything fits over it).
+  // each part swells and fades on its own slow cycle, the tone slowly opens and closes, and a faint breath of
+  // air drifts through it, all sent deep into the hall reverb.
+  // (browsers only allow sound after the first click or key press, so it starts from then)
+  const DRONE_VOLUME = 0.22;   // 0 to 1
+  const DRONE_FADE_IN = 30;    // seconds it takes to come in fully
+  const DRONE_REVERB = 0.85;   // 0-1: how much of it is the hall reverb
+  const DRONE_AIR = 0.06;      // 0-1: how loud the breathy air is
+  // the parts: [pitch in Hz, level]
+  const DRONE_PARTS = [[65.41, 0.55], [98.00, 0.32], [130.81, 0.38], [196.00, 0.22], [293.66, 0.09], [329.63, 0.07]];
+
+  let droneOn = false;
+  function startDrone() {
+    if (droneOn) return;
+    droneOn = true;
+    const ac = noteAudio(), t = ac.currentTime;
+    const out = ac.createGain();
+    out.gain.setValueAtTime(0.0001, t);
+    out.gain.setTargetAtTime(DRONE_VOLUME, t + 0.5, DRONE_FADE_IN / 4); // a very slow, gentle rise
+    const dry = ac.createGain(); dry.gain.value = 1 - DRONE_REVERB * 0.7;
+    const wet = ac.createGain(); wet.gain.value = DRONE_REVERB;
+    out.connect(dry); dry.connect(mixBus); out.connect(wet); wet.connect(hallBus);
+
+    // the tone slowly opens and closes, like breathing (about once every 25 seconds)
+    const tone = droneTone = ac.createBiquadFilter(); tone.type = 'lowpass'; tone.frequency.value = 650; tone.Q.value = 0.7;
+    const sweep = ac.createOscillator(), sweepAmt = ac.createGain();
+    sweep.frequency.value = 0.04; sweepAmt.gain.value = 400;
+    sweep.connect(sweepAmt); sweepAmt.connect(tone.frequency); sweep.start(t);
+    tone.connect(out);
+
+    DRONE_PARTS.forEach(([freq, level], i) => {
+      const part = ac.createGain(); part.gain.value = level;
+      // each part swells and fades on its own slow cycle, so the chord keeps gently shifting
+      const swell = ac.createOscillator(), swellAmt = ac.createGain();
+      swell.frequency.value = 0.025 + Math.random() * 0.06;
+      swellAmt.gain.value = level * 0.6;
+      swell.connect(swellAmt); swellAmt.connect(part.gain); swell.start(t + Math.random() * 10);
+      const pan = ac.createStereoPanner(); pan.pan.value = ((i % 2) ? 1 : -1) * (0.2 + 0.5 * Math.random());
+      part.connect(pan); pan.connect(tone);
+      // two voices a hair out of tune with each other, so it slowly shimmers
+      [-5, 5].forEach(cents => {
+        const o = ac.createOscillator();
+        o.type = freq < 120 ? 'sine' : 'triangle';
+        o.frequency.value = freq; o.detune.value = cents + (Math.random() - 0.5) * 3;
+        o.connect(part); o.start(t);
+      });
+    });
+
+    // a faint breath of air drifting through it: soft noise, its pitch slowly wandering
+    const len = ac.sampleRate * 4, buf = ac.createBuffer(2, len, ac.sampleRate);
+    for (let ch = 0; ch < 2; ch++) { const d = buf.getChannelData(ch); for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1; }
+    const air = ac.createBufferSource(); air.buffer = buf; air.loop = true;
+    const band = ac.createBiquadFilter(); band.type = 'bandpass'; band.frequency.value = 900; band.Q.value = 1.2;
+    const drift = ac.createOscillator(), driftAmt = ac.createGain();
+    drift.frequency.value = 0.03; driftAmt.gain.value = 500;
+    drift.connect(driftAmt); driftAmt.connect(band.frequency); drift.start(t);
+    const airLevel = ac.createGain(); airLevel.gain.value = DRONE_AIR;
+    air.connect(band); band.connect(airLevel); airLevel.connect(out); air.start(t);
+  }
+  ['pointerdown', 'keydown', 'touchend'].forEach(ev =>
+    window.addEventListener(ev, startDrone, { once: true, capture: true }));
+
+  // ---- glow: every pixel on the page gives off a soft halo of its own colour ----
+  // each pixel layer gets a blurred copy of itself just underneath it, redrawn every frame.
+  // the blur is done on a small copy (one point every 4px) and smoothly stretched to fill the screen, so it stays cheap
+  const GLOW_SIZE = 8;          // how far the glow spreads, px
+  const GLOW_STRENGTH = 1.6;    // how bright the glow is (1 = same as the pixels)
+  const GLOW_RES = 4;           // px per point of the glow copy (lower = finer but slower)
+  function addGlow(src, cell, pageTall) { // cell: size of the layer's pixels in px; pageTall: covers the whole page, not just the screen
+    const g = document.createElement('canvas');
+    if (src.id) g.id = src.id + '-glow';
+    Object.assign(g.style, { position: 'fixed', top: 0, left: 0, width: '100vw', height: '100vh',
+      zIndex: getComputedStyle(src).zIndex, pointerEvents: 'none', imageRendering: 'auto' });
+    src.parentNode.insertBefore(g, src); // just under the pixels, so the halo sits behind them
+    const gx = g.getContext('2d');
+    (function copy() {
+      requestAnimationFrame(copy);
+      const W = Math.ceil(window.innerWidth / GLOW_RES), H = Math.ceil(window.innerHeight / GLOW_RES);
+      if (g.width !== W || g.height !== H) { g.width = W; g.height = H; }
+      gx.clearRect(0, 0, W, H);
+      gx.filter = `blur(${GLOW_SIZE / GLOW_RES}px) brightness(${GLOW_STRENGTH}) saturate(1.3)`;
+      gx.imageSmoothingEnabled = false;
+      const k = cell / GLOW_RES; // layer pixels -> glow points
+      if (pageTall) { // only the part of the page that's on screen
+        const y = window.scrollY / cell;
+        gx.drawImage(src, 0, 0, src.width, src.height, 0, -y * k, src.width * k, src.height * k);
+      } else {
+        gx.drawImage(src, 0, 0, src.width * k, src.height * k);
+      }
+      gx.filter = 'none';
+    })();
+  }
+  addGlow(document.getElementById('c'), PIXEL_SIZE, true);
+  addGlow(document.getElementById('falling'), FALL_CELL);
+  addGlow(document.getElementById('note-lines'), LINE_CELL);
+  addGlow(document.getElementById('green'), GREEN_CELL);
+</script>
+<script>
+  // ---- credits: click the little white square to open/close the card ----
+  (function () {
+    const btn = document.getElementById('credits-btn'), card = document.getElementById('credits-card');
+    const setOpen = open => {
+      card.classList.toggle('open', open); btn.classList.toggle('open', open);
+      btn.setAttribute('aria-expanded', open);
+    };
+    // (stop the press here so it doesn't also count as pressing on the fire or the green)
+    [btn, card].forEach(el => el.addEventListener('pointerdown', e => e.stopPropagation()));
+    btn.addEventListener('click', e => { e.stopPropagation(); setOpen(!card.classList.contains('open')); btn.blur(); }); // (blur so typing the poem never re-presses it)
+    window.addEventListener('pointerdown', e => { if (!card.contains(e.target) && e.target !== btn) setOpen(false); });
+    window.addEventListener('keydown', e => { if (e.key === 'Escape') setOpen(false); });
+  })();
+</script>
+</body>
+</html>
